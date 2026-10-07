@@ -4,10 +4,9 @@ Inventario hecho el 2026-10-06 leyendo cada archivo de `lib/`, `pubspec.yaml`,
 `android/app/build.gradle.kts`, `AndroidManifest.xml` y `test/`, y ejecutando `flutter analyze` y
 `flutter build web` (Flutter 3.44.8 stable). Leyenda: ✅ existe y funciona · 🟡 a medias / maqueta · ❌ no existe.
 
-> Aviso: existe también `PROYECTO/normativas_app/`, una copia **más antigua** del frontend (sin login, sin
-> mundos, 11 archivos en `lib/`). El `CLAUDE.md` del proyecto describe esa copia (dice que el chat apunta a
-> `127.0.0.1:8000/api/v1/chat` y envía `mensaje`); **eso no es cierto para `app/`**, que es el repositorio git
-> actual. Este documento describe solo `app/`.
+> Aviso: la copia **más antigua** del frontend (`PROYECTO/normativas_app/`, sin login ni mundos) se archivó el
+> mismo día como `PROYECTO/_ARCHIVO_normativas_app_vieja/`, y `PROYECTO/CLAUDE.md` ya describe `app/` como el
+> frontend vigente. Este documento describe solo `app/`.
 
 ---
 
