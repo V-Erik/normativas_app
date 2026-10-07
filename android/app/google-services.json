@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "228695136206",
+    "project_id": "tutor-ia-upec-ec787",
+    "storage_bucket": "tutor-ia-upec-ec787.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:228695136206:android:120d4ec5ba789d32577d9f",
+        "android_client_info": {
+          "package_name": "ec.edu.upec.tutornormativas"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "228695136206-bs9qh9uj5q6fs3ujfh7jic6lrdb1uro4.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "ec.edu.upec.tutornormativas",
+            "certificate_hash": "b70f7d04072eb5f4e8cbb94b2de2f2feb537263f"
+          }
+        },
+        {
+          "client_id": "228695136206-uadc8m3tcraci777vh8dithtsr5o54ts.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCHtE3cOfZOCdvpSWeGAP7-VRis57V_-Fo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "228695136206-uadc8m3tcraci777vh8dithtsr5o54ts.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "228695136206-heo9l32ph2pqgsms972pnve8oa5cem3a.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "ec.edu.upec.tutornormativas"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
