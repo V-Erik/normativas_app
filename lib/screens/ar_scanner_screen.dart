@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:lottie/lottie.dart';
+import 'package:rive/rive.dart' as rive;
+import '../services/chat_service.dart'; // <-- IMPORTANTE: Importamos tu servicio de IA
 
 class ArScannerScreen extends StatefulWidget {
   const ArScannerScreen({super.key});
@@ -10,8 +11,59 @@ class ArScannerScreen extends StatefulWidget {
 }
 
 class _ArScannerScreenState extends State<ArScannerScreen> {
-  bool _isScanned = false; 
+  bool _isScanned = false;
   String _codigoDetectado = '';
+  
+  // Variables nuevas para la IA
+  bool _isLoadingIA = false; 
+  String _respuestaTutor = '';
+
+  // API nueva de rive 0.14+. Cargamos el archivo y creamos el
+  // controlador de forma manual, indicando EXPLÍCITAMENTE el nombre de
+  // la State Machine ("State Machine 1") en vez de dejar que Rive elija
+  // una por defecto — si el .riv tiene más de una, dejarlo "automático"
+  // puede terminar mostrando una vacía o sin animación.
+  rive.File? _riveFile;
+  rive.RiveWidgetController? _riveController;
+  String? _riveError;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargarAvatarRive();
+  }
+
+  Future<void> _cargarAvatarRive() async {
+    try {
+      final file = await rive.File.asset(
+        'assets/models/iso_tutor.riv',
+        riveFactory: rive.Factory.rive,
+      );
+      if (file == null) {
+        setState(() => _riveError = 'No se pudo decodificar el archivo .riv');
+        return;
+      }
+      final controller = rive.RiveWidgetController(file);
+      // Imprime en consola el nombre real de la State Machine que se
+      // cargó, por si luego quieres forzarla explícitamente por nombre.
+      debugPrint('Rive: State Machine cargada -> ${controller.stateMachine.name}');
+      if (!mounted) return;
+      setState(() {
+        _riveFile = file;
+        _riveController = controller;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _riveError = e.toString());
+    }
+  }
+
+  @override
+  void dispose() {
+    _riveController?.dispose();
+    _riveFile?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,15 +82,30 @@ class _ArScannerScreenState extends State<ArScannerScreen> {
         children: [
           // 1. FONDO: La cámara siempre encendida
           MobileScanner(
-            onDetect: (capture) {
-              if (!_isScanned) { // Solo procesa si no ha escaneado nada aún
+            onDetect: (capture) async { // <-- Lo hacemos asíncrono para esperar a la IA
+              // Solo procesa si no ha escaneado nada y la IA no está pensando
+              if (!_isScanned && !_isLoadingIA) { 
                 final List<Barcode> barcodes = capture.barcodes;
                 for (final barcode in barcodes) {
                   if (barcode.rawValue != null) {
                     setState(() {
                       _codigoDetectado = barcode.rawValue!;
                       _isScanned = true;
+                      _isLoadingIA = true; // La IA empieza a pensar
                     });
+
+                    // ¡Llamamos al cerebro de la IA en tu backend!
+                    final respuestaIA = await ChatService.preguntarAlTutor(
+                      "Hola, el estudiante escaneó la norma $_codigoDetectado. Explícala brevemente."
+                    );
+
+                    if (mounted) {
+                      setState(() {
+                        _respuestaTutor = respuestaIA;
+                        _isLoadingIA = false; // La IA ya tiene la respuesta
+                      });
+                    }
+                    
                     break;
                   }
                 }
@@ -85,7 +152,7 @@ class _ArScannerScreenState extends State<ArScannerScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Globo de texto con el resultado
+                  // Globo de texto con el resultado de la IA
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 20),
                     padding: const EdgeInsets.all(16),
@@ -99,9 +166,16 @@ class _ArScannerScreenState extends State<ArScannerScreen> {
                     child: Column(
                       children: [
                         Text(
-                          '¡Norma detectada:\n$_codigoDetectado!',
+                          // Aquí cambiamos el texto dinámicamente
+                          _isLoadingIA 
+                              ? '¡Norma $_codigoDetectado detectada!\n\nDejame consultar mis documentos...' 
+                              : _respuestaTutor,
                           textAlign: TextAlign.center,
-                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold, 
+                            color: _isLoadingIA ? Colors.grey.shade700 : Colors.deepPurple,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 12),
                         ElevatedButton.icon(
@@ -115,18 +189,34 @@ class _ArScannerScreenState extends State<ArScannerScreen> {
                             setState(() {
                               _isScanned = false;
                               _codigoDetectado = '';
+                              _respuestaTutor = ''; // Limpiamos la respuesta de la IA
                             });
                           },
                         )
                       ],
                     ),
                   ),
-                  // Animación 2D flotando en tu cámara
-                  Lottie.network(
-                    'https://assets8.lottiefiles.com/packages/lf20_ikvz7qhc.json', 
+
+                  // ¡Aquí entra tu Tutor ISO animado en Rive! (Intacto)
+                  SizedBox(
                     width: 320,
                     height: 320,
-                    fit: BoxFit.contain,
+                    child: _riveError != null
+                        ? Center(
+                            child: Text(
+                              'No se pudo cargar el tutor:\n$_riveError',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          )
+                        : _riveController == null
+                            ? const Center(
+                                child: CircularProgressIndicator(color: Colors.white),
+                              )
+                            : rive.RiveWidget(
+                                controller: _riveController!,
+                                fit: rive.Fit.contain,
+                              ),
                   ),
                 ],
               ),
