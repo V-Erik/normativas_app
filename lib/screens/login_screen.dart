@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import '../../theme/app_theme.dart';
-import '../../widgets/auth_background.dart';
-import '../../widgets/duo_button.dart';
-import '../../widgets/glass_card.dart';
-import '../../widgets/neumorphic_text_field.dart';
+import '../theme/app_theme.dart';
+import '../widgets/auth_background.dart';
+import '../widgets/duo_button.dart';
+import '../widgets/glass_card.dart';
+import '../widgets/neumorphic_text_field.dart';
 import 'main_scaffold.dart';
 import 'register_screen.dart';
 
@@ -75,7 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               height: 64,
                               alignment: Alignment.center,
                               decoration: BoxDecoration(
-                                color: AppColors.primaryGreen.withOpacity(0.15),
+                                color: AppColors.primaryGreen.withValues(alpha: 0.15),
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(Icons.school_rounded,

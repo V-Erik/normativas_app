@@ -126,7 +126,7 @@ class _CaminoPainter extends CustomPainter {
 
       final recorrido = i < indiceActual;
       final paint = Paint()
-        ..color = recorrido ? colorActivo.withOpacity(0.55) : AppColors.border
+        ..color = recorrido ? colorActivo.withValues(alpha: 0.55) : AppColors.border
         ..strokeWidth = 2.5
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round;
@@ -229,7 +229,7 @@ class _MinimalNodeState extends State<_MinimalNode>
         borde = color;
         iconoColor = color;
         sombra = [
-          BoxShadow(color: color.withOpacity(0.22), blurRadius: 18, spreadRadius: 1),
+          BoxShadow(color: color.withValues(alpha: 0.22), blurRadius: 18, spreadRadius: 1),
         ];
         break;
       case NivelEstado.bloqueado:

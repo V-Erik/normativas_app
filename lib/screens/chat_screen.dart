@@ -4,17 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/chat_message.dart';
-import '../models/normativa.dart';
 import '../theme/app_theme.dart';
 
 /// Pantalla de Chat con el Tutor IA. Conectada a una API local vía HTTP.
-///
-/// IMPORTANTE: agrega `http: ^1.2.2` (o la versión más reciente) a las
-/// dependencias de tu `pubspec.yaml` y corre `flutter pub get` antes de
-/// compilar, ya que esta pantalla usa el paquete `http`.
 class ChatScreen extends StatefulWidget {
-  final Normativa? normativa;
-  const ChatScreen({super.key, this.normativa});
+  const ChatScreen({super.key});
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -36,11 +30,10 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    final codigo = widget.normativa?.codigo ?? 'Ingeniería de Software';
     _messages.add(
-      ChatMessage(
+      const ChatMessage(
         isUser: false,
-        text: '¡Hola! Soy tu tutor IA 🤖. Hoy vamos a repasar $codigo. '
+        text: '¡Hola! Soy tu tutor IA 🤖. Hoy vamos a repasar Ingeniería de Software. '
             '¿Sobre qué característica o cláusula te gustaría empezar?',
       ),
     );
@@ -82,10 +75,7 @@ class _ChatScreenState extends State<ChatScreen> {
           .post(
             Uri.parse(_apiUrl),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'message': mensaje,
-              'normativa': widget.normativa?.codigo,
-            }),
+            body: jsonEncode({'message': mensaje}),
           )
           .timeout(const Duration(seconds: 20));
 
@@ -143,29 +133,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.normativa?.color ?? AppColors.deepPurple;
+    const color = AppColors.deepPurple;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.normativa?.codigo ?? 'Tutor IA'),
-        // automaticallyImplyLeading ya muestra el back button solo cuando
-        // esta pantalla fue empujada con Navigator.push (no como pestaña).
+        title: const Text('Tutor IA'),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16),
-            child: widget.normativa != null
-                ? Hero(
-                    tag: 'normativa-icon-${widget.normativa!.codigo}',
-                    child: CircleAvatar(
-                      backgroundColor: color,
-                      child: const Icon(Icons.smart_toy_rounded,
-                          color: Colors.white, size: 20),
-                    ),
-                  )
-                : CircleAvatar(
-                    backgroundColor: color.withOpacity(0.15),
-                    child: Icon(Icons.smart_toy_rounded, color: color, size: 20),
-                  ),
+            child: CircleAvatar(
+              backgroundColor: color.withValues(alpha: 0.15),
+              child: const Icon(Icons.smart_toy_rounded, color: color, size: 20),
+            ),
           ),
         ],
       ),
@@ -226,7 +205,7 @@ class _ChatBubble extends StatelessWidget {
             if (!esUsuario) ...[
               CircleAvatar(
                 radius: 14,
-                backgroundColor: accentColor.withOpacity(0.15),
+                backgroundColor: accentColor.withValues(alpha: 0.15),
                 child: Icon(Icons.smart_toy_rounded, color: accentColor, size: 16),
               ),
               const SizedBox(width: 8),
@@ -276,7 +255,7 @@ class _TypingBubble extends StatelessWidget {
           children: [
             CircleAvatar(
               radius: 14,
-              backgroundColor: accentColor.withOpacity(0.15),
+              backgroundColor: accentColor.withValues(alpha: 0.15),
               child: Icon(Icons.smart_toy_rounded, color: accentColor, size: 16),
             ),
             const SizedBox(width: 8),

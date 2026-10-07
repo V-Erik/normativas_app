@@ -1,4 +1,4 @@
-package com.example.normativas_app
+package ec.edu.upec.tutornormativas
 
 import io.flutter.embedding.android.FlutterActivity
 

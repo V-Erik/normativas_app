@@ -42,7 +42,7 @@ class AppShadows {
 
   static List<BoxShadow> soft({Color? tint}) => [
         BoxShadow(
-          color: (tint ?? Colors.black).withOpacity(tint != null ? 0.18 : 0.06),
+          color: (tint ?? Colors.black).withValues(alpha: tint != null ? 0.18 : 0.06),
           blurRadius: 24,
           spreadRadius: -4,
           offset: const Offset(0, 10),

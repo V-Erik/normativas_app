@@ -30,7 +30,7 @@ class IsoLevelScreen extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: CircleAvatar(
-              backgroundColor: seccion.color.withOpacity(0.15),
+              backgroundColor: seccion.color.withValues(alpha: 0.15),
               child: Icon(seccion.icono, color: seccion.color, size: 20),
             ),
           ),

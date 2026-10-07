@@ -175,12 +175,12 @@ class _WorldCard extends StatelessWidget {
                     end: Alignment.bottomRight,
                     colors: bloqueado
                         ? const [Color(0xFFEDEEF2), Color(0xFFE2E4EA)]
-                        : [colorBase.withOpacity(0.14), colorBase.withOpacity(0.30)],
+                        : [colorBase.withValues(alpha: 0.14), colorBase.withValues(alpha: 0.30)],
                   ),
                   border: Border.all(color: Colors.white, width: 3),
                   boxShadow: [
                     BoxShadow(
-                      color: (bloqueado ? Colors.black : colorBase).withOpacity(0.10),
+                      color: (bloqueado ? Colors.black : colorBase).withValues(alpha: 0.10),
                       blurRadius: 22,
                       offset: const Offset(0, 10),
                     ),

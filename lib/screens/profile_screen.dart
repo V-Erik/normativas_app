@@ -100,7 +100,7 @@ class _ProfileHeader extends StatelessWidget {
         borderRadius: BorderRadius.circular(26),
         boxShadow: [
           BoxShadow(
-            color: AppColors.deepPurpleDark.withOpacity(0.3),
+            color: AppColors.deepPurpleDark.withValues(alpha: 0.3),
             blurRadius: 16,
             offset: const Offset(0, 8),
           ),
@@ -128,7 +128,7 @@ class _ProfileHeader extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             'Estudiante de Ingeniería de Software',
-            style: TextStyle(fontSize: 12.5, color: Colors.white.withOpacity(0.9)),
+            style: TextStyle(fontSize: 12.5, color: Colors.white.withValues(alpha: 0.9)),
           ),
         ],
       ),
@@ -160,7 +160,7 @@ class _StatCard extends StatelessWidget {
         border: Border.all(color: AppColors.border, width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -172,7 +172,7 @@ class _StatCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
+              color: color.withValues(alpha: 0.15),
               shape: BoxShape.circle,
             ),
             child: Icon(icon, color: color, size: 22),

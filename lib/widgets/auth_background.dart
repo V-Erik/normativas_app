@@ -19,17 +19,17 @@ class AuthBackground extends StatelessWidget {
           Positioned(
             top: -60,
             left: -50,
-            child: _Blob(color: AppColors.primaryGreen.withOpacity(0.35), size: 220),
+            child: _Blob(color: AppColors.primaryGreen.withValues(alpha: 0.35), size: 220),
           ),
           Positioned(
             top: 120,
             right: -70,
-            child: _Blob(color: AppColors.electricBlue.withOpacity(0.30), size: 200),
+            child: _Blob(color: AppColors.electricBlue.withValues(alpha: 0.30), size: 200),
           ),
           Positioned(
             bottom: -70,
             left: -40,
-            child: _Blob(color: AppColors.deepPurple.withOpacity(0.28), size: 240),
+            child: _Blob(color: AppColors.deepPurple.withValues(alpha: 0.28), size: 240),
           ),
           child,
         ],
@@ -50,7 +50,7 @@ class _Blob extends StatelessWidget {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: RadialGradient(colors: [color, color.withOpacity(0)]),
+        gradient: RadialGradient(colors: [color, color.withValues(alpha: 0)]),
       ),
     );
   }
