@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../widgets/app_bottom_nav.dart';
 import 'ar_scanner_screen.dart';
 import 'chat_screen.dart';
-import 'home_screen.dart';
+import 'home_screen_rediseno.dart';
 import 'profile_screen.dart';
 
 /// Contenedor principal de la app: mantiene las 4 pestañas vivas con
@@ -19,7 +19,7 @@ class _MainScaffoldState extends State<MainScaffold> {
   int _index = 0;
 
   static const List<Widget> _tabs = [
-    HomeScreen(),
+    HomeScreenRediseno(),
     ChatScreen(),
     ArScannerScreen(),
     ProfileScreen(),

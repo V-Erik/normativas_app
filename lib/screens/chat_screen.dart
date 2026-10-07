@@ -1,42 +1,72 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
 import '../models/chat_message.dart';
+import '../models/SeccionSilabo.dart';
+import '../services/chat_service.dart';
+import '../services/progreso_service.dart';
 import '../theme/app_theme.dart';
 
-/// Pantalla de Chat con el Tutor IA. Conectada a una API local vía HTTP.
+/// Marcador que le pedimos a la IA que agregue, en una línea aparte, al
+/// final de su respuesta SOLO cuando el estudiante respondió bien la
+/// pregunta de la lección actual. Se oculta del texto que ve el usuario
+/// y dispara el desbloqueo de la siguiente lección.
+const String _marcadorNivelCompletado = '[[NIVEL_COMPLETADO]]';
+
+/// Pantalla de Chat con el Tutor IA.
+///
+/// Modo libre: se abre sin [mundo]/[capitulo]/[leccion] (ej. desde la pestaña
+/// "Tutor IA" del menú inferior) y funciona como un chat normal.
+///
+/// Modo Ruta: se abre desde una lección con los tres parámetros indicados.
+/// Ahí el chat le manda a la IA una instrucción oculta (prompt oculto) para que
+/// la conversación gire en torno a esa lección específica, y detecta cuándo el
+/// estudiante ya respondió bien para desbloquear la siguiente lección.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  final SeccionSilabo? mundo;
+  final CapituloSilabo? capitulo;
+  final LeccionSilabo? leccion;
+
+  const ChatScreen({
+    super.key,
+    this.mundo,
+    this.capitulo,
+    this.leccion,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  // Cambia esta URL según dónde corra tu API:
-  // - Emulador Android -> 10.0.2.2 apunta al localhost de tu PC.
-  // - Simulador iOS / Chrome / Windows -> usa http://localhost:5000/api/chat
-  // - Dispositivo físico -> usa la IP de tu PC en la red local.
-  static const String _apiUrl = 'http://10.0.2.2:5000/api/chat';
-
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<ChatMessage> _messages = [];
 
   bool _isTyping = false;
+  bool _nivelCompletado = false;
+
+  bool get _esModoRuta =>
+      widget.mundo != null && widget.capitulo != null && widget.leccion != null;
 
   @override
   void initState() {
     super.initState();
-    _messages.add(
-      const ChatMessage(
-        isUser: false,
-        text: '¡Hola! Soy tu tutor IA 🤖. Hoy vamos a repasar Ingeniería de Software. '
-            '¿Sobre qué característica o cláusula te gustaría empezar?',
-      ),
-    );
+    if (_esModoRuta) {
+      // Arranque silencioso: le pedimos a la IA que inicie la lección,
+      // sin mostrar un mensaje vacío del "usuario" en el chat.
+      sendMessage(
+        '${widget.mundo!.nombre} - Capítulo ${widget.capitulo!.numeroCapitulo}: ${widget.leccion!.titulo}',
+        mostrarComoUsuario: false,
+      );
+    } else {
+      _messages.add(
+        const ChatMessage(
+          isUser: false,
+          text: '¡Hola! Soy tu tutor IA 🤖. ¿Sobre qué concepto de normativas '
+              'de software te gustaría que te oriente hoy?',
+        ),
+      );
+    }
   }
 
   @override
@@ -58,57 +88,74 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  /// Envía [text] a la API local del tutor IA y añade la respuesta al chat.
-  Future<void> sendMessage(String text) async {
+  /// Instrucción interna (prompt oculto) que programa al tutor para la
+  /// lección actual. Solo existe en Modo Ruta.
+  String? get _promptOculto {
+    if (!_esModoRuta) return null;
+
+    return '''Actúa como un tutor guiando paso a paso. El estudiante está en:
+- Mundo ${widget.mundo!.numeroMundo}: ${widget.mundo!.nombre}
+- Capítulo ${widget.capitulo!.numeroCapitulo}: ${widget.capitulo!.nombre}
+- Lección ${widget.leccion!.numero}: ${widget.leccion!.titulo}
+
+Tipo de lección: ${widget.leccion!.tipoLeccion}
+Objetivo: ${widget.capitulo!.objetivoAprendizaje}
+${widget.capitulo!.normasUsadas.isNotEmpty ? 'Normas asociadas: ${widget.capitulo!.normasUsadas.join(', ')}' : ''}
+
+Tu tarea:
+1. Explica brevemente el concepto de la lección (máximo 2-3 párrafos)
+2. Hazle una pregunta de opción múltiple para verificar la comprensión
+3. Cuando el estudiante responda:
+   - Si es correcto: felicítalo brevemente y agrega en una línea aparte: $_marcadorNivelCompletado
+   - Si no es correcto: dale una pista breve y vuelve a preguntar
+
+IMPORTANTE: El marcador solo se agrega cuando la respuesta es correcta.''';
+  }
+
+  /// Envía [text] al tutor IA. Si [mostrarComoUsuario] es false, no se
+  /// agrega una burbuja de usuario visible (se usa para el arranque
+  /// silencioso de una lección en Modo Ruta).
+  Future<void> sendMessage(String text, {bool mostrarComoUsuario = true}) async {
     final mensaje = text.trim();
     if (mensaje.isEmpty || _isTyping) return;
 
     setState(() {
-      _messages.add(ChatMessage(text: mensaje, isUser: true));
+      if (mostrarComoUsuario) {
+        _messages.add(ChatMessage(text: mensaje, isUser: true));
+      }
       _isTyping = true;
     });
-    _controller.clear();
+    if (mostrarComoUsuario) _controller.clear();
     _scrollToBottom();
 
-    try {
-      final response = await http
-          .post(
-            Uri.parse(_apiUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'message': mensaje}),
-          )
-          .timeout(const Duration(seconds: 20));
+    // Enviar al backend con contexto
+    final respuesta = await ChatService.preguntarAlTutor(
+      mensaje,
+      systemContext: _promptOculto,
+      capituloFiltro: _esModoRuta ? widget.capitulo?.id : null,
+      normaFiltro: _esModoRuta ? widget.capitulo?.normasUsadas.first : null,
+    );
 
-      String respuesta;
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        respuesta = (data['reply'] ?? data['response'] ?? '').toString();
-        if (respuesta.isEmpty) {
-          respuesta = 'No entendí eso, ¿puedes reformular tu pregunta?';
-        }
-      } else {
-        respuesta =
-            'El servidor respondió con un error (${response.statusCode}). '
-            'Intenta de nuevo en unos segundos.';
-      }
+    final completo = respuesta.contains(_marcadorNivelCompletado);
+    final textoVisible = respuesta.replaceAll(_marcadorNivelCompletado, '').trim();
 
-      setState(() {
-        _messages.add(ChatMessage(text: respuesta, isUser: false));
-      });
-    } catch (_) {
-      setState(() {
-        _messages.add(
-          const ChatMessage(
-            text: 'No pude conectarme al tutor IA. Verifica que el '
-                'servidor local esté activo e inténtalo de nuevo.',
-            isUser: false,
-          ),
-        );
-      });
-    } finally {
-      if (mounted) setState(() => _isTyping = false);
-      _scrollToBottom();
+    setState(() {
+      _messages.add(ChatMessage(text: textoVisible, isUser: false));
+      _isTyping = false;
+      if (completo) _nivelCompletado = true;
+    });
+
+    // Si se completó la lección, desbloquear la siguiente
+    if (completo && _esModoRuta) {
+      final mundos = ProgresoService.instance.obtenerMundos();
+      ProgresoService.instance.completarLeccion(
+        widget.leccion!.id,
+        widget.leccion!.experiencia,
+        mundos,
+      );
     }
+
+    _scrollToBottom();
   }
 
   void _lanzarVisorAr() {
@@ -133,18 +180,29 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const color = AppColors.deepPurple;
+    final color = widget.mundo?.colorPrimario ?? AppColors.deepPurple;
+    final titulo = _esModoRuta
+        ? 'Capítulo ${widget.capitulo!.numeroCapitulo} · ${widget.leccion!.numero}'
+        : 'Tutor IA';
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tutor IA'),
+        title: Text(titulo),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16),
-            child: CircleAvatar(
-              backgroundColor: color.withValues(alpha: 0.15),
-              child: const Icon(Icons.smart_toy_rounded, color: color, size: 20),
-            ),
+            child: _esModoRuta
+                ? Hero(
+                    tag: 'mundo-icon-${widget.mundo!.id}',
+                    child: CircleAvatar(
+                      backgroundColor: color,
+                      child: Text(widget.mundo!.icono, style: const TextStyle(fontSize: 18)),
+                    ),
+                  )
+                : CircleAvatar(
+                    backgroundColor: color.withValues(alpha: 0.15),
+                    child: Icon(Icons.smart_toy_rounded, color: color, size: 20),
+                  ),
           ),
         ],
       ),
@@ -159,25 +217,75 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (index >= _messages.length) {
                   return _TypingBubble(accentColor: color);
                 }
-                final mensaje = _messages[index];
-                return _ChatBubble(mensaje: mensaje, accentColor: color);
+                return _ChatBubble(mensaje: _messages[index], accentColor: color);
               },
             ),
           ),
-          _InputBar(
-            controller: _controller,
-            enabled: !_isTyping,
-            onSend: () => sendMessage(_controller.text),
-            onLaunchAr: _lanzarVisorAr,
-          ),
+          if (_nivelCompletado)
+            _NivelCompletadoBanner(
+              color: color,
+              onVolver: () => Navigator.of(context).pop(),
+            )
+          else
+            _InputBar(
+              controller: _controller,
+              enabled: !_isTyping,
+              onSend: () => sendMessage(_controller.text),
+              onLaunchAr: _lanzarVisorAr,
+            ),
         ],
       ),
     );
   }
 }
 
-/// Burbuja individual de chat, alineada según el emisor. Usa
-/// [MediaQuery] para limitar su ancho máximo de forma responsive.
+/// Aviso que reemplaza la barra de escritura cuando la lección actual se
+/// completó: felicita al estudiante y lo regresa al mapa de lecciones.
+class _NivelCompletadoBanner extends StatelessWidget {
+  final Color color;
+  final VoidCallback onVolver;
+
+  const _NivelCompletadoBanner({required this.color, required this.onVolver});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: const BoxDecoration(
+          color: AppColors.surface,
+          boxShadow: [
+            BoxShadow(color: Color(0x14000000), blurRadius: 12, offset: Offset(0, -2)),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.emoji_events_rounded, color: color),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                '¡Lección completada! Se desbloqueó la siguiente.',
+                style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.textDark),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: onVolver,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: color,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: const Text('Volver'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Burbuja individual de chat, alineada según el emisor.
 class _ChatBubble extends StatelessWidget {
   final ChatMessage mensaje;
   final Color accentColor;
@@ -187,7 +295,6 @@ class _ChatBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final esUsuario = mensaje.isUser;
-
     final bubbleColor = esUsuario ? AppColors.primaryGreen : Colors.white;
     final textColor = esUsuario ? Colors.white : AppColors.textDark;
 
@@ -195,9 +302,7 @@ class _ChatBubble extends StatelessWidget {
       alignment: esUsuario ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 6),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -221,9 +326,7 @@ class _ChatBubble extends StatelessWidget {
                     bottomLeft: Radius.circular(esUsuario ? AppRadius.bubble : 4),
                     bottomRight: Radius.circular(esUsuario ? 4 : AppRadius.bubble),
                   ),
-                  border: esUsuario
-                      ? null
-                      : Border.all(color: AppColors.border, width: 1.5),
+                  border: esUsuario ? null : Border.all(color: AppColors.border, width: 1.5),
                 ),
                 child: Text(
                   mensaje.text,
@@ -238,7 +341,6 @@ class _ChatBubble extends StatelessWidget {
   }
 }
 
-/// Burbuja de "escribiendo..." mientras se espera la respuesta de la API.
 class _TypingBubble extends StatelessWidget {
   final Color accentColor;
   const _TypingBubble({required this.accentColor});
@@ -275,10 +377,7 @@ class _TypingBubble extends StatelessWidget {
                 height: 12,
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: List.generate(
-                    3,
-                    (_) => const _TypingDot(color: AppColors.textGrey),
-                  ),
+                  children: List.generate(3, (_) => const _TypingDot(color: AppColors.textGrey)),
                 ),
               ),
             ),
@@ -303,7 +402,6 @@ class _TypingDot extends StatelessWidget {
   }
 }
 
-/// Barra fija inferior con campo de texto redondeado, botón AR y botón de enviar.
 class _InputBar extends StatelessWidget {
   final TextEditingController controller;
   final VoidCallback onSend;
@@ -339,23 +437,18 @@ class _InputBar extends StatelessWidget {
                 maxLines: 4,
                 textCapitalization: TextCapitalization.sentences,
                 decoration: InputDecoration(
-                  hintText: enabled
-                      ? 'Pregúntale algo al tutor IA...'
-                      : 'Esperando respuesta...',
+                  hintText: enabled ? 'Pregúntale algo al tutor IA...' : 'Esperando respuesta...',
                   hintStyle: const TextStyle(color: AppColors.textGrey),
                   filled: true,
                   fillColor: AppColors.background,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(AppRadius.field),
                     borderSide: BorderSide.none,
                   ),
-                  // Ícono AR embebido dentro del propio campo de texto.
                   suffixIcon: IconButton(
                     tooltip: 'Lanzar visor AR',
-                    icon: const Icon(Icons.view_in_ar_rounded,
-                        color: AppColors.deepPurple),
+                    icon: const Icon(Icons.view_in_ar_rounded, color: AppColors.deepPurple),
                     onPressed: enabled ? onLaunchAr : null,
                   ),
                 ),

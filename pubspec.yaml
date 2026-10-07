@@ -37,6 +37,7 @@ environment:
   #http: ^1.6.0
 
 dependencies:
+  crypto: ^3.0.6
   firebase_auth: ^6.7.0
   firebase_core: ^4.15.0
   flutter:
@@ -45,6 +46,7 @@ dependencies:
   http: ^1.6.0
   lottie: ^3.5.1
   mobile_scanner: ^7.4.0
+  rive: ^0.14.11
   shared_preferences: ^2.5.6
 
 dev_dependencies:
@@ -70,7 +72,9 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
-  # assets:
+  assets:
+    - assets/models/iso_tutor.riv
+    - assets/animations/Frame_1.json
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg
 
