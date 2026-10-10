@@ -33,6 +33,9 @@ class ProfileScreen extends StatelessWidget {
     if (confirmar != true) return;
 
     await AuthService.instance.cerrarSesion();
+    // Para que el siguiente usuario de este telefono no vea el avance
+    // del anterior. En disco se guarda por uid, el problema es la RAM.
+    ProgresoService.instance.limpiarMemoria();
     if (!context.mounted) return;
 
     Navigator.of(context).pushNamedAndRemoveUntil('/login', (ruta) => false);

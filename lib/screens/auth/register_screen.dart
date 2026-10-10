@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../../services/auth_service.dart';
+import '../../services/progreso_service.dart';
 import '../../widgets/auth_background.dart';
 import '../../widgets/duo_button.dart';
 import '../../widgets/glass_card.dart';
@@ -54,6 +55,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
       setState(() => _error = resultado.mensajeError);
       return;
     }
+
+    // Recupera el avance guardado de este usuario y pide al servidor su
+    // XP y su racha. Sin esto el estudiante entraria siempre con 0 XP.
+    await ProgresoService.instance.iniciarSesionEstudiante();
+    if (!mounted) return;
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const MainScaffold()),

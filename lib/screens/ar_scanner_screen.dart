@@ -95,7 +95,7 @@ class _ArScannerScreenState extends State<ArScannerScreen> {
                     });
 
                     // ¡Llamamos al cerebro de la IA en tu backend!
-                    final respuestaIA = await ChatService.preguntarAlTutor(
+                    final respuestaIA = await ChatService.preguntarTexto(
                       "Hola, el estudiante escaneó la norma $_codigoDetectado. Explícala brevemente."
                     );
 

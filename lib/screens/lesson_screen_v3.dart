@@ -84,6 +84,14 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
       _respuestasCorrectas++;
       _xpTotalesGanados += xp;
     }
+    // Reporta el ejercicio al servidor (+10 si acerto, +2 si no).
+    // No se espera: el XP del servidor no debe retrasar la animacion.
+    ProgresoService.instance.registrarEjercicio(
+      '${widget.leccion.id}-ej-$_pasoActual',
+      correcto: esCorrecta,
+      leccionId: widget.leccion.id,
+    );
+
     _mostrarResultado(esCorrecta, xp, ejercicio.explicacion);
   }
 
@@ -96,13 +104,17 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
     }
   }
 
-  void _completarLeccion() {
+  Future<void> _completarLeccion() async {
     setState(() => _leccionCompletada = true);
-    ProgresoService.instance.completarLeccion(
+
+    // Ademas de marcarla en memoria, la guarda en el dispositivo y la
+    // reporta al servidor (+20 XP y racha). No vuelve a reportar si la
+    // leccion ya estaba completada: el backend no deduplica.
+    await ProgresoService.instance.completarLeccion(
       widget.leccion.id,
       _xpTotalesGanados,
-      ProgresoService.instance.obtenerMundos(),
     );
+
     Future.delayed(const Duration(milliseconds: 350), () {
       if (mounted) _mostrarResumen();
     });
