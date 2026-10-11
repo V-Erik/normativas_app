@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/progreso_service.dart';
+import '../widgets/gesto_demo.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -255,28 +256,32 @@ class _Encabezado extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Avatar con las iniciales del usuario registrado
-          Container(
-            width: 82,
-            height: 82,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
+          // Avatar con las iniciales del usuario registrado.
+          // Manteniéndolo pulsado 3 s se abre el modo demostración:
+          // ver `GestoDemo`, que explica por qué es un gesto y no un botón.
+          GestoDemo(
+            child: Container(
+              width: 82,
+              height: 82,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.12),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                iniciales,
+                style: const TextStyle(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.deepPurple,
                 ),
-              ],
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              iniciales,
-              style: const TextStyle(
-                fontSize: 30,
-                fontWeight: FontWeight.w800,
-                color: AppColors.deepPurple,
               ),
             ),
           ),
