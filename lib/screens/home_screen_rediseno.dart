@@ -5,6 +5,7 @@ import '../services/auth_service.dart';
 import '../services/progreso_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mascota_eso.dart';
+import 'glosario_screen.dart';
 import 'lesson_screen_v3.dart';
 import 'silabo_roadmap_screen.dart';
 
@@ -319,6 +320,20 @@ class _Cabecera extends StatelessWidget {
                   valor: '$racha',
                   texto: racha == 1 ? 'día seguido' : 'días seguidos',
                 ),
+                const Spacer(),
+                // Acceso al glosario. Va aquí y no en una barra superior
+                // porque esta pantalla no tiene AppBar: la cabecera con
+                // degradado ocupa ese espacio. La pastilla reutiliza la
+                // forma de las de XP y racha, así que no introduce un
+                // elemento visual nuevo; lo que la distingue como botón
+                // es el icono y el borde algo más marcado.
+                _ChipAccion(
+                  icono: Icons.menu_book_outlined,
+                  texto: 'Glosario',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const GlosarioScreen()),
+                  ),
+                ),
               ],
             ),
           ],
@@ -363,6 +378,61 @@ class _Chip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Pastilla pulsable de la cabecera.
+///
+/// POR QUÉ VA EN BLANCO SÓLIDO Y NO TRANSLÚCIDA
+/// --------------------------------------------
+/// La primera versión reutilizaba el mismo fondo semitransparente de
+/// [_Chip] y quedaba indistinguible de los contadores de XP y racha: en
+/// una fila de tres pastillas iguales, nada indica que una se pulsa. El
+/// blanco sólido con el texto en morado invierte el contraste respecto
+/// del degradado y la separa de golpe del resto, sin añadir una forma
+/// nueva a la cabecera. La sombra la despega un poco del fondo, que es
+/// la señal que el ojo lee como «esto se toca».
+class _ChipAccion extends StatelessWidget {
+  final IconData icono;
+  final String texto;
+  final VoidCallback onTap;
+
+  const _ChipAccion({
+    required this.icono,
+    required this.texto,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      elevation: 3,
+      shadowColor: Colors.black.withOpacity(0.28),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icono, size: 16, color: AppColors.deepPurple),
+              const SizedBox(width: 6),
+              Text(
+                texto,
+                style: const TextStyle(
+                  color: AppColors.deepPurple,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -13,6 +13,26 @@ class MockPreguntas {
 
     'cap-1-1-lec-1': [
       Ejercicio(
+        id: 'q111e',
+        tipo: TipoEjercicio.completarTexto,
+        pregunta: 'La norma ISO/IEC/IEEE ___ define los procesos del ciclo de vida del software.',
+        opciones: ['12207', '27001', '25010', '29119'],
+        respuestaCorrecta: '12207',
+        explicacion: ['La 12207 agrupa los procesos en técnicos, de gestión y organizacionales.'],
+        pista: 'No es la de seguridad ni la de calidad de producto.',
+        xpPorRespuesta: 10,
+      ),
+      Ejercicio(
+        id: 'q111f',
+        tipo: TipoEjercicio.completarTexto,
+        pregunta: '___ comprueba que el producto se construyó según su especificación; ___ comprueba que esa especificación resolvía el problema real.',
+        opciones: ['La verificación', 'La validación', 'La auditoría', 'La trazabilidad'],
+        respuestaCorrecta: 'La verificación La validación',
+        explicacion: ['Se puede verificar con éxito un sistema que no sirve para nada.'],
+        pista: 'Una mira el documento; la otra, la necesidad.',
+        xpPorRespuesta: 10,
+      ),
+      Ejercicio(
         id: 'q111a',
         tipo: TipoEjercicio.multipleChoice,
         pregunta: '¿Qué es el SDLC?',

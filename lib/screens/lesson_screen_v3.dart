@@ -1,7 +1,11 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/SeccionSilabo.dart';
 import '../models/ejercicio_model.dart';
 import '../services/progreso_service.dart';
+import '../data/frases_mascota.dart';
 import '../data/mock_preguntas.dart';
 import '../data/mock_contenidos.dart';
 import 'chat_screen.dart';
@@ -28,13 +32,65 @@ class LessonScreenV3 extends StatefulWidget {
 }
 
 class _LessonScreenV3State extends State<LessonScreenV3> {
+  /// Cuántas preguntas se plantean por intento.
+  ///
+  /// Si el banco de la lección tiene más, se toma una muestra distinta
+  /// cada vez. Con el banco actual de cuatro no cambia nada todavía,
+  /// pero en cuanto se amplíe, repetir una lección deja de ser repetir
+  /// exactamente el mismo examen.
+  static const int _preguntasPorIntento = 4;
+
   int _pasoActual = 0;
   int _tarjetaActual = 0;
   int _respuestasCorrectas = 0;
   int _xpTotalesGanados = 0;
   bool _leccionCompletada = false;
 
+  final math.Random _azar = math.Random();
+
   late List<Ejercicio> _ejercicios;
+
+  /// Opciones ya barajadas, en paralelo a [_ejercicios].
+  ///
+  /// POR QUÉ SE GUARDAN Y NO SE BARAJAN AL DIBUJAR
+  /// ---------------------------------------------
+  /// Barajar dentro del `build` sería un desastre: la pantalla se
+  /// reconstruye varias veces por pregunta (al pulsar una opción, al
+  /// cerrar la hoja de resultado) y las respuestas cambiarían de sitio
+  /// mientras el estudiante las está leyendo. Peor aún al fallar: la
+  /// pregunta se repite, y si las opciones se recolocaran, el segundo
+  /// intento sería a ciegas.
+  ///
+  /// Se barajan una sola vez por intento y se conservan.
+  late List<List<String>> _opciones;
+
+  /// Índices de preguntas ya reportadas al servidor.
+  ///
+  /// Al fallar, la pregunta se vuelve a intentar, y sin este control cada
+  /// intento sumaba otra vez los puntos por participación. Bastaba con
+  /// fallar en bucle para subir de nivel.
+  final Set<int> _reportadas = {};
+
+  /// Respuesta marcada pero todavía no comprobada.
+  ///
+  /// POR QUÉ HAY UN PASO INTERMEDIO
+  /// ------------------------------
+  /// Antes, tocar una opción la evaluaba en el acto. Eso convertía
+  /// cualquier roce en una respuesta incorrecta sin vuelta atrás, y
+  /// quitaba el momento de decidir, que es justo donde el estudiante
+  /// piensa. Ahora se marca, se puede cambiar, y se confirma con el
+  /// botón de abajo.
+  ///
+  /// Importa además para la validación con estudiantes: un toque
+  /// accidental contabilizado como fallo ensucia los datos del reactivo
+  /// que mide si el ejercicio les hizo razonar.
+  String? _respuestaElegida;
+
+  /// Lo que dice la mascota en la pregunta actual. Se elige una vez al
+  /// cambiar de pregunta y se guarda: si se sorteara dentro del `build`,
+  /// la frase cambiaría sola cada vez que la pantalla se redibuja.
+  String _fraseBurbuja = '';
+
   ContenidoLeccion? _contenido;
 
   final PageController _pageController = PageController();
@@ -43,11 +99,40 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
   @override
   void initState() {
     super.initState();
-    _ejercicios = MockPreguntas.obtenerPreguntasLeccion(widget.leccion.id);
-    if (_ejercicios.isEmpty) {
-      _ejercicios = MockPreguntas.obtenerPreguntasLeccion('default');
-    }
+    _prepararEjercicios();
     _contenido = MockContenidos.obtenerContenido(widget.leccion.id);
+  }
+
+  /// Arma la tanda de preguntas de este intento.
+  ///
+  /// Baraja el orden de las preguntas y, en cada una, el orden de las
+  /// opciones. Lo segundo era necesario: en el banco actual la respuesta
+  /// correcta ocupa la primera posición en las 115 preguntas de opción
+  /// múltiple, de modo que un estudiante atento aprende a pulsar arriba
+  /// sin leer.
+  ///
+  /// Barajar aquí y no en el archivo de datos tiene dos ventajas: el
+  /// orden cambia en cada intento, y una pregunta nueva escrita más
+  /// adelante no puede volver a introducir el sesgo por descuido.
+  ///
+  /// Es seguro porque [Ejercicio.validarRespuesta] compara el texto de la
+  /// respuesta, no su posición.
+  void _prepararEjercicios() {
+    var banco = MockPreguntas.obtenerPreguntasLeccion(widget.leccion.id);
+    if (banco.isEmpty) {
+      banco = MockPreguntas.obtenerPreguntasLeccion('default');
+    }
+
+    final mezcladas = List<Ejercicio>.of(banco)..shuffle(_azar);
+    _ejercicios = mezcladas.length > _preguntasPorIntento
+        ? mezcladas.sublist(0, _preguntasPorIntento)
+        : mezcladas;
+
+    _opciones = [
+      for (final e in _ejercicios) List<String>.of(e.opciones)..shuffle(_azar),
+    ];
+
+    _reportadas.clear();
   }
 
   @override
@@ -68,29 +153,61 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
         curve: Curves.easeOutCubic,
       );
     } else {
-      setState(() => _pasoActual = 1);
+      setState(() {
+        _pasoActual = 1;
+        _refrescarFrase();
+      });
     }
+  }
+
+  /// Sortea la frase de la burbuja para la pregunta actual.
+  void _refrescarFrase() {
+    if (_pasoActual < 1 || _pasoActual > _ejercicios.length) return;
+    final ejercicio = _ejercicios[_pasoActual - 1];
+    _fraseBurbuja = FrasesMascota.pregunta(
+      numero: _pasoActual,
+      total: _ejercicios.length,
+      esCompletar: ejercicio.tipo == TipoEjercicio.completarTexto,
+    );
+  }
+
+  /// Marca una respuesta sin comprobarla todavía.
+  void _elegir(String? respuesta) {
+    if (respuesta == _respuestaElegida) return;
+    HapticFeedback.selectionClick();
+    setState(() => _respuestaElegida = respuesta);
   }
 
   void _responderEjercicio(String respuesta) {
     if (_pasoActual == 0 || _leccionCompletada) return;
     if (respuesta.trim().isEmpty) return;
 
-    final ejercicio = _ejercicios[_pasoActual - 1];
+    final indice = _pasoActual - 1;
+    final ejercicio = _ejercicios[indice];
     final esCorrecta = ejercicio.validarRespuesta(respuesta);
     final xp = esCorrecta ? ejercicio.xpPorRespuesta : 0;
 
     if (esCorrecta) {
       _respuestasCorrectas++;
       _xpTotalesGanados += xp;
+      HapticFeedback.mediumImpact();
+    } else {
+      HapticFeedback.heavyImpact();
     }
+
     // Reporta el ejercicio al servidor (+10 si acerto, +2 si no).
     // No se espera: el XP del servidor no debe retrasar la animacion.
-    ProgresoService.instance.registrarEjercicio(
-      '${widget.leccion.id}-ej-$_pasoActual',
-      correcto: esCorrecta,
-      leccionId: widget.leccion.id,
-    );
+    //
+    // Solo el primer intento de cada pregunta. Al fallar, la pregunta se
+    // repite, y reportar cada reintento regalaba los puntos por
+    // participacion tantas veces como el estudiante quisiera fallar.
+    if (_reportadas.add(indice)) {
+      ProgresoService.instance.registrarEjercicio(
+        '${widget.leccion.id}-ej-${ejercicio.id}',
+        correcto: esCorrecta,
+        leccionId: widget.leccion.id,
+      );
+    }
 
     _mostrarResultado(esCorrecta, xp, ejercicio.explicacion);
   }
@@ -98,7 +215,13 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
   void _irAlSiguiente() {
     _respuestaController.clear();
     if (_pasoActual < _ejercicios.length) {
-      setState(() => _pasoActual++);
+      setState(() {
+        _pasoActual++;
+        // La selección es de la pregunta anterior; arrastrarla dejaría el
+        // botón de comprobar activo antes de tocar nada.
+        _respuestaElegida = null;
+        _refrescarFrase();
+      });
     } else {
       _completarLeccion();
     }
@@ -127,6 +250,11 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
         esCorrecta ? const Color(0xFF2E9E5B) : const Color(0xFFD64545);
     final Color fondo =
         esCorrecta ? const Color(0xFFE8F6EE) : const Color(0xFFFCEBEB);
+
+    // Se sortea aquí, fuera del `builder`, para que la hoja no cambie de
+    // veredicto si se vuelve a dibujar mientras está abierta.
+    final veredicto =
+        esCorrecta ? FrasesMascota.acierto() : FrasesMascota.fallo();
 
     showModalBottomSheet(
       context: context,
@@ -163,7 +291,7 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
 
             // Veredicto
             Text(
-              esCorrecta ? '¡Muy bien!' : 'Casi',
+              veredicto,
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 24,
@@ -220,31 +348,13 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
             ),
 
             const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  if (esCorrecta) _irAlSiguiente();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: acento,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(vertical: 17),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                child: Text(
-                  esCorrecta ? 'Continuar' : 'Intentar de nuevo',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ),
+            _BotonPrincipal(
+              texto: esCorrecta ? 'Continuar' : 'Intentar de nuevo',
+              color: acento,
+              onPressed: () {
+                Navigator.pop(context);
+                if (esCorrecta) _irAlSiguiente();
+              },
             ),
           ],
         ),
@@ -271,10 +381,13 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
               children: [
                 const MascotaESO(size: 112),
                 const SizedBox(height: 14),
-                const Text(
-                  '¡Lección completada!',
+                Text(
+                  FrasesMascota.resumen(
+                    aciertos: _respuestasCorrectas,
+                    total: _ejercicios.length,
+                  ),
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.3,
@@ -334,6 +447,10 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
                       _respuestasCorrectas = 0;
                       _xpTotalesGanados = 0;
                       _leccionCompletada = false;
+                      _respuestaElegida = null;
+                      // Nuevo intento, nueva tanda: otro orden de
+                      // preguntas y de opciones.
+                      _prepararEjercicios();
                     });
                     _pageController.jumpToPage(0);
                   },
@@ -460,6 +577,8 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
               tarjeta: _tarjetas[i],
               color: widget.mundo.colorPrimario,
               primera: i == 0,
+              indice: i + 1,
+              total: _tarjetas.length,
             ),
           ),
         ),
@@ -496,28 +615,10 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
             ),
           ),
           const SizedBox(height: 18),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _avanzarTarjeta,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: widget.mundo.colorPrimario,
-                foregroundColor: Colors.white,
-                elevation: 0,
-                padding: const EdgeInsets.symmetric(vertical: 17),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(17),
-                ),
-              ),
-              child: Text(
-                ultima ? 'Empezar los ejercicios' : 'Siguiente',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ),
+          _BotonPrincipal(
+            texto: ultima ? 'Empezar los ejercicios' : 'Siguiente',
+            color: widget.mundo.colorPrimario,
+            onPressed: _avanzarTarjeta,
           ),
         ],
       ),
@@ -545,20 +646,13 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
               style: TextStyle(fontSize: 15, color: Colors.grey[600]),
             ),
             const SizedBox(height: 26),
-            ElevatedButton(
-              onPressed: () => setState(() => _pasoActual = 1),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: widget.mundo.colorPrimario,
-                foregroundColor: Colors.white,
-                elevation: 0,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 15),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              child: const Text('Ir a los ejercicios',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
+            _BotonPrincipal(
+              texto: 'Ir a los ejercicios',
+              color: widget.mundo.colorPrimario,
+              onPressed: () => setState(() {
+                _pasoActual = 1;
+                _refrescarFrase();
+              }),
             ),
           ],
         ),
@@ -571,60 +665,125 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
   Widget _buildEjercicio() {
     if (_pasoActual > _ejercicios.length) return const SizedBox();
     final ejercicio = _ejercicios[_pasoActual - 1];
+    final color = widget.mundo.colorPrimario;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(22, 10, 22, 34),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+    // En el banco de palabras, el enunciado ya se dibuja dentro de la
+    // tarjeta, con sus huecos en su sitio. Repetirlo arriba en negrita y
+    // con los `___` a la vista mostraba la misma frase dos veces y dejaba
+    // los guiones bajos crudos, que no significan nada para quien lee.
+    final esBanco = ejercicio.tipo == TipoEjercicio.completarTexto &&
+        _opciones[_pasoActual - 1].isNotEmpty;
+
+    // El contenido se reparte en tres bloques y ocupa la altura completa.
+    // Antes todo se apilaba arriba y el hueco sobrante quedaba al fondo,
+    // que es lo que hacía parecer la pantalla a medio terminar.
+    return LayoutBuilder(
+      builder: (context, cajas) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(22, 6, 22, 24),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: cajas.maxHeight - 30),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const MascotaESO(size: 76, saludoPeriodico: false),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _Burbuja(
-                  texto: 'Pregunta $_pasoActual de ${_ejercicios.length}',
-                  color: widget.mundo.colorPrimario,
-                ),
+              // ---------- Enunciado ----------
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const MascotaESO(size: 70, saludoPeriodico: false),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _Burbuja(texto: _fraseBurbuja, color: color),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  _Etiqueta(
+                    texto: 'PREGUNTA $_pasoActual DE ${_ejercicios.length}',
+                    color: color,
+                  ),
+                  if (!esBanco) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      ejercicio.pregunta,
+                      style: const TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w800,
+                        height: 1.32,
+                        letterSpacing: -0.3,
+                        color: Color(0xFF17171C),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+
+              // ---------- Respuesta ----------
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 22),
+                child: _buildOpciones(ejercicio, _opciones[_pasoActual - 1]),
+              ),
+
+              // ---------- Pista y confirmación, abajo ----------
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (ejercicio.pista.isNotEmpty)
+                    // La clave es necesaria: sin ella Flutter reutiliza
+                    // el State de la pista anterior y, una vez abierta
+                    // una, las siguientes aparecen ya desplegadas.
+                    _Pista(
+                      key: ValueKey('pista-${ejercicio.id}'),
+                      texto: ejercicio.pista,
+                      color: color,
+                    ),
+                  const SizedBox(height: 12),
+                  _BotonPrincipal(
+                    texto: 'Comprobar',
+                    color: color,
+                    onPressed: _respuestaElegida == null
+                        ? null
+                        : () => _responderEjercicio(_respuestaElegida!),
+                  ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 26),
-          Text(
-            ejercicio.pregunta,
-            style: const TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              height: 1.32,
-              letterSpacing: -0.3,
-              color: Color(0xFF17171C),
-            ),
-          ),
-          const SizedBox(height: 26),
-          _buildOpciones(ejercicio),
-          if (ejercicio.pista.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            _Pista(
-              texto: ejercicio.pista,
-              color: widget.mundo.colorPrimario,
-            ),
-          ],
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildOpciones(Ejercicio ejercicio) {
+  /// [opciones] llega ya barajada desde [_prepararEjercicios]; no se usa
+  /// `ejercicio.opciones` directamente para no mostrar siempre el mismo
+  /// orden del archivo de datos.
+  ///
+  /// Ningún tipo de ejercicio comprueba por su cuenta: todos se limitan a
+  /// dejar la respuesta en [_respuestaElegida] y el único botón de
+  /// comprobar vive al pie de la pantalla. Así el gesto de confirmar
+  /// está siempre en el mismo sitio, se escriba, se toque o se arme la
+  /// respuesta.
+  Widget _buildOpciones(Ejercicio ejercicio, List<String> opciones) {
+    final color = widget.mundo.colorPrimario;
+
     switch (ejercicio.tipo) {
       case TipoEjercicio.multipleChoice:
+        // `stretch` es lo que faltaba: sin él, el Column centra a los
+        // hijos y cada tarjeta se encoge hasta el ancho de su texto, de
+        // modo que «ISO 9001» salía mucho más estrecha que
+        // «ISO/IEC/IEEE 12207» y la columna quedaba dentada.
         return Column(
-          children: ejercicio.opciones
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: opciones
               .map(
                 (opcion) => _OpcionCard(
                   texto: opcion,
-                  color: widget.mundo.colorPrimario,
-                  onTap: () => _responderEjercicio(opcion),
+                  color: color,
+                  seleccionada: _respuestaElegida == opcion,
+                  onTap: () => _elegir(opcion),
                 ),
               )
               .toList(),
@@ -638,7 +797,8 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
                 texto: 'Verdadero',
                 icono: Icons.check_rounded,
                 color: const Color(0xFF2E9E5B),
-                onTap: () => _responderEjercicio('true'),
+                seleccionado: _respuestaElegida == 'true',
+                onTap: () => _elegir('true'),
               ),
             ),
             const SizedBox(width: 14),
@@ -647,66 +807,61 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
                 texto: 'Falso',
                 icono: Icons.close_rounded,
                 color: const Color(0xFFD64545),
-                onTap: () => _responderEjercicio('false'),
+                seleccionado: _respuestaElegida == 'false',
+                onTap: () => _elegir('false'),
               ),
             ),
           ],
         );
 
       case TipoEjercicio.completarTexto:
-        return Column(
-          children: [
-            TextField(
-              controller: _respuestaController,
-              textInputAction: TextInputAction.done,
-              style: const TextStyle(fontSize: 16),
-              decoration: InputDecoration(
-                hintText: 'Escribe tu respuesta',
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(
-                      color: widget.mundo.colorPrimario.withOpacity(0.25),
-                      width: 2),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(
-                      color: widget.mundo.colorPrimario.withOpacity(0.25),
-                      width: 2),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(
-                      color: widget.mundo.colorPrimario, width: 2),
-                ),
-                contentPadding: const EdgeInsets.all(18),
-              ),
-              onSubmitted: (_) =>
-                  _responderEjercicio(_respuestaController.text),
+        // Si el ejercicio trae opciones, se resuelve tocando palabras de
+        // un banco en vez de escribiendo. Es más rápido en el teléfono,
+        // evita las erratas y se parece a lo que el estudiante ya conoce
+        // de otras apps de aprendizaje.
+        //
+        // No hace falta un tipo nuevo en el modelo: la validación de
+        // `completarTexto` compara el texto de la respuesta, y el banco
+        // entrega exactamente eso, las palabras elegidas unidas por
+        // espacios.
+        if (opciones.isNotEmpty) {
+          return _BancoPalabras(
+            key: ValueKey('banco-${ejercicio.id}'),
+            enunciado: ejercicio.pregunta,
+            palabras: opciones,
+            color: color,
+            onCambio: (respuesta) => setState(
+              () => _respuestaElegida = respuesta,
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () =>
-                    _responderEjercicio(_respuestaController.text),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: widget.mundo.colorPrimario,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(vertical: 17),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(17),
-                  ),
-                ),
-                child: const Text('Comprobar',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16)),
-              ),
+          );
+        }
+        return TextField(
+          controller: _respuestaController,
+          textInputAction: TextInputAction.done,
+          style: const TextStyle(fontSize: 16),
+          onChanged: (v) => setState(
+            () => _respuestaElegida = v.trim().isEmpty ? null : v,
+          ),
+          decoration: InputDecoration(
+            hintText: 'Escribe tu respuesta',
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide:
+                  BorderSide(color: color.withOpacity(0.25), width: 2),
             ),
-          ],
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide:
+                  BorderSide(color: color.withOpacity(0.25), width: 2),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide(color: color, width: 2),
+            ),
+            contentPadding: const EdgeInsets.all(18),
+          ),
         );
 
       default:
@@ -786,34 +941,48 @@ class _Burbuja extends StatelessWidget {
 
 /// Una tarjeta de teoría. El contenido se centra verticalmente cuando
 /// es corto, y pasa a desplazarse cuando no cabe.
+/// POR QUÉ EL CUERPO VA DENTRO DE UNA TARJETA BLANCA
+/// -------------------------------------------------
+/// Antes el título y el texto flotaban sueltos sobre el fondo. Con
+/// treinta o cuarenta palabras por pantalla, eso deja dos huecos enormes
+/// arriba y abajo y la lección parece sin terminar. Encerrar el cuerpo
+/// en una superficie con borde y relleno generoso le da un contorno: la
+/// misma cantidad de texto ocupa un bloque reconocible en vez de flotar.
+///
+/// Es un parche de presentación, no la solución. Lo que de verdad
+/// llena estas pantallas es más contenido por tarjeta.
 class _TarjetaVista extends StatelessWidget {
   final TarjetaTeoria tarjeta;
   final Color color;
   final bool primera;
+  final int indice;
+  final int total;
 
   const _TarjetaVista({
     required this.tarjeta,
     required this.color,
     required this.primera,
+    required this.indice,
+    required this.total,
   });
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(22, 14, 22, 14),
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
         child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: constraints.maxHeight - 28),
+          constraints: BoxConstraints(minHeight: constraints.maxHeight - 20),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // Mascota y burbuja
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   MascotaESO(
-                    size: primera ? 100 : 78,
+                    size: primera ? 92 : 74,
                     saludoPeriodico: primera,
                   ),
                   const SizedBox(width: 10),
@@ -822,111 +991,161 @@ class _TarjetaVista extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 30),
+              const SizedBox(height: 18),
 
-              if (tarjeta.titulo.isNotEmpty) ...[
-                Text(
-                  tarjeta.titulo,
-                  style: const TextStyle(
-                    fontSize: 27,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
-                    letterSpacing: -0.6,
-                    color: Color(0xFF17171C),
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-
-              if (tarjeta.texto.isNotEmpty)
-                Text(
-                  tarjeta.texto,
-                  style: const TextStyle(
-                    fontSize: 16.5,
-                    height: 1.65,
-                    color: Color(0xFF45454D),
-                  ),
-                ),
-
-              if (tarjeta.vinetas.isNotEmpty) ...[
-                if (tarjeta.texto.isNotEmpty) const SizedBox(height: 20),
-                ...tarjeta.vinetas.map(
-                  (v) => Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 15, vertical: 13),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFFEDEDF2)),
+              Container(
+                padding: const EdgeInsets.fromLTRB(22, 22, 22, 24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: const Color(0xFFEAEAF2)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.035),
+                      blurRadius: 18,
+                      offset: const Offset(0, 6),
                     ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          margin: const EdgeInsets.only(top: 7),
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            v,
-                            style: const TextStyle(
-                              fontSize: 15.5,
-                              height: 1.45,
-                              color: Color(0xFF32323A),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  ],
                 ),
-              ],
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _Etiqueta(
+                      texto: 'IDEA $indice DE $total',
+                      color: color,
+                    ),
+                    const SizedBox(height: 12),
 
-              if (tarjeta.destacado != null) ...[
-                const SizedBox(height: 22),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.07),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 30,
-                        height: 30,
-                        decoration: BoxDecoration(
-                          color: color.withOpacity(0.18),
-                          shape: BoxShape.circle,
+                    if (tarjeta.titulo.isNotEmpty) ...[
+                      Text(
+                        tarjeta.titulo,
+                        style: const TextStyle(
+                          fontSize: 25,
+                          fontWeight: FontWeight.w800,
+                          height: 1.2,
+                          letterSpacing: -0.6,
+                          color: Color(0xFF17171C),
                         ),
-                        child: Icon(Icons.lightbulb_rounded,
-                            color: color, size: 17),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          tarjeta.destacado!,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            height: 1.55,
-                            color: Color(0xFF3A3A42),
+                      const SizedBox(height: 14),
+                    ],
+
+                    if (tarjeta.texto.isNotEmpty)
+                      Text(
+                        tarjeta.texto,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          height: 1.62,
+                          color: Color(0xFF45454D),
+                        ),
+                      ),
+
+                    if (tarjeta.vinetas.isNotEmpty) ...[
+                      if (tarjeta.texto.isNotEmpty) const SizedBox(height: 18),
+                      ...tarjeta.vinetas.map(
+                        (v) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                margin: const EdgeInsets.only(top: 7),
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: color,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  v,
+                                  style: const TextStyle(
+                                    fontSize: 15.5,
+                                    height: 1.5,
+                                    color: Color(0xFF32323A),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
                     ],
-                  ),
+
+                    if (tarjeta.destacado != null) ...[
+                      const SizedBox(height: 18),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(15, 15, 15, 15),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.07),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 30,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                color: color.withOpacity(0.18),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(Icons.lightbulb_rounded,
+                                  color: color, size: 17),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                tarjeta.destacado!,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  height: 1.5,
+                                  color: Color(0xFF3A3A42),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              ],
+              ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Rótulo pequeño en versales que encabeza un bloque.
+class _Etiqueta extends StatelessWidget {
+  final String texto;
+  final Color color;
+
+  const _Etiqueta({required this.texto, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Text(
+          texto,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.1,
+            color: color,
           ),
         ),
       ),
@@ -939,7 +1158,7 @@ class _Pista extends StatefulWidget {
   final String texto;
   final Color color;
 
-  const _Pista({required this.texto, required this.color});
+  const _Pista({super.key, required this.texto, required this.color});
 
   @override
   State<_Pista> createState() => _PistaState();
@@ -995,15 +1214,22 @@ class _PistaState extends State<_Pista> {
   }
 }
 
-/// Opción de respuesta con efecto de pulsación.
+/// Opción de respuesta.
+///
+/// Tiene tres estados y los tres se ven distintos: en reposo, marcada
+/// (el estudiante la eligió pero aún no comprueba) y pulsada. El estado
+/// marcado es el que faltaba: sin él no había forma de saber qué
+/// habías elegido antes de confirmar.
 class _OpcionCard extends StatefulWidget {
   final String texto;
   final Color color;
+  final bool seleccionada;
   final VoidCallback onTap;
 
   const _OpcionCard({
     required this.texto,
     required this.color,
+    required this.seleccionada,
     required this.onTap,
   });
 
@@ -1016,6 +1242,8 @@ class _OpcionCardState extends State<_OpcionCard> {
 
   @override
   Widget build(BuildContext context) {
+    final marcada = widget.seleccionada;
+
     return GestureDetector(
       onTapDown: (_) => setState(() => _presionada = true),
       onTapCancel: () => setState(() => _presionada = false),
@@ -1028,15 +1256,17 @@ class _OpcionCardState extends State<_OpcionCard> {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
         decoration: BoxDecoration(
-          color: _presionada ? widget.color.withOpacity(0.1) : Colors.white,
+          color: marcada || _presionada
+              ? widget.color.withOpacity(0.12)
+              : Colors.white,
           borderRadius: BorderRadius.circular(17),
           border: Border.all(
-            color: _presionada
+            color: marcada || _presionada
                 ? widget.color
                 : widget.color.withOpacity(0.22),
-            width: 2,
+            width: marcada ? 2.4 : 2,
           ),
-          boxShadow: _presionada
+          boxShadow: marcada || _presionada
               ? null
               : [
                   BoxShadow(
@@ -1046,13 +1276,104 @@ class _OpcionCardState extends State<_OpcionCard> {
                   ),
                 ],
         ),
-        child: Text(
-          widget.texto,
-          style: const TextStyle(
-            fontSize: 16,
-            height: 1.4,
-            color: Color(0xFF2A2A32),
-            fontWeight: FontWeight.w500,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                widget.texto,
+                style: TextStyle(
+                  fontSize: 16,
+                  height: 1.4,
+                  color: marcada
+                      ? widget.color
+                      : const Color(0xFF2A2A32),
+                  fontWeight: marcada ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ),
+            if (marcada) ...[
+              const SizedBox(width: 10),
+              Icon(Icons.check_circle_rounded, color: widget.color, size: 21),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Botón de acción principal, con relieve.
+///
+/// POR QUÉ EL LABIO INFERIOR
+/// -------------------------
+/// Es el detalle que separa un botón plano de uno que parece una tecla:
+/// una franja más oscura de cuatro píxeles bajo el botón, que desaparece
+/// al pulsarlo mientras el botón baja esos mismos cuatro píxeles. El
+/// movimiento es mínimo y es lo que hace que la pantalla se sienta
+/// física en lugar de inerte.
+///
+/// El labio se consigue con un contenedor oscuro detrás y relleno
+/// inferior, no con `Border(bottom:)`: un borde no uniforme combinado
+/// con `borderRadius` hace saltar una aserción de BoxDecoration.
+class _BotonPrincipal extends StatefulWidget {
+  final String texto;
+  final Color color;
+  final VoidCallback? onPressed;
+
+  const _BotonPrincipal({
+    required this.texto,
+    required this.color,
+    required this.onPressed,
+  });
+
+  @override
+  State<_BotonPrincipal> createState() => _BotonPrincipalState();
+}
+
+class _BotonPrincipalState extends State<_BotonPrincipal> {
+  bool _abajo = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final activo = widget.onPressed != null;
+    final base = activo ? widget.color : const Color(0xFFE4E4ED);
+    final sombra = activo
+        ? Color.lerp(widget.color, Colors.black, 0.28)!
+        : const Color(0xFFD2D2DE);
+    final hundido = _abajo && activo;
+
+    return GestureDetector(
+      onTapDown: activo ? (_) => setState(() => _abajo = true) : null,
+      onTapCancel: activo ? () => setState(() => _abajo = false) : null,
+      onTapUp: activo
+          ? (_) {
+              setState(() => _abajo = false);
+              widget.onPressed!();
+            }
+          : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 80),
+        margin: EdgeInsets.only(top: hundido ? 4 : 0),
+        padding: EdgeInsets.only(bottom: hundido ? 0 : 4),
+        decoration: BoxDecoration(
+          color: sombra,
+          borderRadius: BorderRadius.circular(17),
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: base,
+            borderRadius: BorderRadius.circular(17),
+          ),
+          child: Text(
+            widget.texto,
+            style: TextStyle(
+              color: activo ? Colors.white : const Color(0xFFA0A0AE),
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+              letterSpacing: 0.2,
+            ),
           ),
         ),
       ),
@@ -1065,12 +1386,14 @@ class _BotonVF extends StatefulWidget {
   final String texto;
   final IconData icono;
   final Color color;
+  final bool seleccionado;
   final VoidCallback onTap;
 
   const _BotonVF({
     required this.texto,
     required this.icono,
     required this.color,
+    required this.seleccionado,
     required this.onTap,
   });
 
@@ -1094,20 +1417,29 @@ class _BotonVFState extends State<_BotonVF> {
         duration: const Duration(milliseconds: 110),
         padding: const EdgeInsets.symmetric(vertical: 24),
         decoration: BoxDecoration(
-          color: _presionado
-              ? widget.color.withOpacity(0.18)
-              : widget.color.withOpacity(0.07),
-          border: Border.all(color: widget.color, width: 2),
+          color: widget.seleccionado
+              ? widget.color
+              : _presionado
+                  ? widget.color.withOpacity(0.18)
+                  : widget.color.withOpacity(0.07),
+          border: Border.all(
+            color: widget.color,
+            width: widget.seleccionado ? 2.4 : 2,
+          ),
           borderRadius: BorderRadius.circular(17),
         ),
         child: Column(
           children: [
-            Icon(widget.icono, color: widget.color, size: 26),
+            Icon(
+              widget.icono,
+              color: widget.seleccionado ? Colors.white : widget.color,
+              size: 26,
+            ),
             const SizedBox(height: 7),
             Text(
               widget.texto,
               style: TextStyle(
-                color: widget.color,
+                color: widget.seleccionado ? Colors.white : widget.color,
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
               ),
@@ -1116,5 +1448,241 @@ class _BotonVFState extends State<_BotonVF> {
         ),
       ),
     );
+  }
+}
+/// Ejercicio de completar con un banco de palabras.
+///
+/// CÓMO SE USA
+/// -----------
+/// El enunciado del ejercicio lleva uno o varios `___`, y cada uno se
+/// convierte en un hueco. Debajo aparecen las palabras del campo
+/// `opciones`, ya barajadas. El estudiante toca una palabra y esta salta
+/// al primer hueco libre; toca un hueco ocupado y la palabra vuelve al
+/// banco.
+///
+/// POR QUÉ NO LLEVA UN TIPO PROPIO EN EL MODELO
+/// --------------------------------------------
+/// Porque no hace falta. Es un `completarTexto` con `opciones`, y la
+/// validación existente compara el texto de la respuesta: el banco
+/// entrega las palabras elegidas unidas por espacios y la comparación
+/// funciona igual, con su tolerancia a erratas incluida. Añadir un valor
+/// al enum habría obligado a tocar el modelo y todos los `switch` que lo
+/// recorren, a cambio de nada.
+///
+/// POR QUÉ LA PALABRA USADA NO DESAPARECE DEL BANCO
+/// ------------------------------------------------
+/// Se deja un hueco invisible en su sitio. Si las fichas se recolocaran
+/// al usar una, las demás cambiarían de posición entre toque y toque, y
+/// acertar pasaría a depender de la puntería.
+class _BancoPalabras extends StatefulWidget {
+  final String enunciado;
+  final List<String> palabras;
+  final Color color;
+
+  /// Avisa a la pantalla de la respuesta en curso: el texto completo
+  /// cuando no queda ningún hueco libre, y `null` mientras falte alguno.
+  ///
+  /// El banco no comprueba por su cuenta; el botón vive al pie de la
+  /// pantalla, igual que en los demás tipos de ejercicio.
+  final void Function(String?) onCambio;
+
+  const _BancoPalabras({
+    super.key,
+    required this.enunciado,
+    required this.palabras,
+    required this.color,
+    required this.onCambio,
+  });
+
+  @override
+  State<_BancoPalabras> createState() => _BancoPalabrasState();
+}
+
+class _BancoPalabrasState extends State<_BancoPalabras> {
+  /// Trozos del enunciado entre hueco y hueco.
+  late final List<String> _partes;
+
+  /// Para cada hueco, el índice de la palabra del banco que lo ocupa.
+  late List<int?> _puestas;
+
+  @override
+  void initState() {
+    super.initState();
+    _partes = widget.enunciado.split('___');
+    // Si el enunciado no trae ningún `___`, se asume un hueco al final.
+    final huecos = _partes.length > 1 ? _partes.length - 1 : 1;
+    _puestas = List<int?>.filled(huecos, null);
+  }
+
+  bool get _completo => _puestas.every((p) => p != null);
+
+  String get _respuesta => _puestas
+      .map((i) => i == null ? '' : widget.palabras[i])
+      .join(' ')
+      .trim();
+
+  void _colocar(int indiceBanco) {
+    final libre = _puestas.indexOf(null);
+    if (libre == -1) return;
+    HapticFeedback.selectionClick();
+    setState(() => _puestas[libre] = indiceBanco);
+    _avisar();
+  }
+
+  void _quitar(int hueco) {
+    HapticFeedback.selectionClick();
+    setState(() => _puestas[hueco] = null);
+    _avisar();
+  }
+
+  /// Notifica a la pantalla tras el frame en curso.
+  ///
+  /// Llamar al callback durante el `setState` del hijo provocaría un
+  /// `setState` del padre en plena construcción, que Flutter rechaza.
+  void _avisar() {
+    final valor = _completo ? _respuesta : null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onCambio(valor);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _frase(),
+        const SizedBox(height: 22),
+        _Etiqueta(texto: 'TOCA LAS PALABRAS', color: widget.color),
+        const SizedBox(height: 12),
+        _banco(),
+      ],
+    );
+  }
+
+  /// La frase con sus huecos, dentro de una tarjeta.
+  Widget _frase() {
+    final hijos = <Widget>[];
+
+    for (var i = 0; i < _partes.length; i++) {
+      for (final palabra in _partes[i].split(RegExp(r'\s+'))) {
+        if (palabra.isEmpty) continue;
+        hijos.add(
+          Text(
+            palabra,
+            style: const TextStyle(
+              fontSize: 17,
+              height: 1.2,
+              color: Color(0xFF32323A),
+            ),
+          ),
+        );
+      }
+      if (i < _puestas.length) hijos.add(_hueco(i));
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFEAEAF2)),
+      ),
+      // Cada palabra es un hijo del Wrap, así que el espacio entre ellas
+      // lo fija `spacing` y no el espacio tipográfico normal. Con 7 se
+      // veían desperdigadas; 5 se acerca a cómo se lee un párrafo.
+      child: Wrap(
+        spacing: 5,
+        runSpacing: 9,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: hijos,
+      ),
+    );
+  }
+
+  Widget _hueco(int i) {
+    final indice = _puestas[i];
+
+    if (indice == null) {
+      return Container(
+        width: 82,
+        height: 34,
+        decoration: BoxDecoration(
+          color: widget.color.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: widget.color.withOpacity(0.38),
+            width: 1.6,
+          ),
+        ),
+      );
+    }
+
+    return GestureDetector(
+      onTap: () => _quitar(i),
+      child: Container(
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: 13),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: widget.color,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          widget.palabras[indice],
+          style: const TextStyle(
+            fontSize: 15.5,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _banco() {
+    return Wrap(
+      spacing: 9,
+      runSpacing: 10,
+      children: [
+        for (var i = 0; i < widget.palabras.length; i++) _ficha(i),
+      ],
+    );
+  }
+
+  Widget _ficha(int i) {
+    final usada = _puestas.contains(i);
+
+    final ficha = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: widget.color.withOpacity(0.3), width: 1.6),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Text(
+        widget.palabras[i],
+        style: const TextStyle(
+          fontSize: 15.5,
+          fontWeight: FontWeight.w600,
+          color: Color(0xFF2A2A32),
+        ),
+      ),
+    );
+
+    // Hueco invisible: conserva el sitio para que el banco no se mueva.
+    if (usada) {
+      return IgnorePointer(child: Opacity(opacity: 0, child: ficha));
+    }
+
+    return GestureDetector(onTap: () => _colocar(i), child: ficha);
   }
 }
