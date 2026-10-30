@@ -49,3 +49,5 @@ android/key.properties
 *.jks
 ios/Pods/
 ios/.symlinks/
+# Entorno de Python para generar_voces.py
+.venv/
