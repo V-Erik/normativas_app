@@ -4,7 +4,7 @@ import '../models/SeccionSilabo.dart';
 import '../services/auth_service.dart';
 import '../services/progreso_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/mascota_eso.dart';
+import '../widgets/mascota_viva.dart';
 import 'glosario_screen.dart';
 import 'lesson_screen_v3.dart';
 import 'silabo_roadmap_screen.dart';
@@ -308,7 +308,23 @@ class _Cabecera extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                const MascotaESO(size: 96, saludoPeriodico: true),
+                // Aquí se dibuja MascotaViva directamente y no a través de
+                // MascotaESO. El adaptador conserva la caja cuadrada de la
+                // versión de Lottie, y en esta cabecera eso desperdicia
+                // medio centímetro de ancho: el muñeco entero mide 0,4234
+                // de su altura, así que dentro de una caja de 96 solo
+                // ocupa 47 y el resto queda en blanco. Ese espacio le hace
+                // falta al nombre, que va a 30 px y se corta con un
+                // apellido largo.
+                //
+                // `inquieta` es lo que sustituye al saludo periódico:
+                // en vez de repetir la animación de entrada cada doce
+                // segundos, sortea un brinco, un ladeo o un estirón.
+                const MascotaViva(
+                  size: 118,
+                  completa: true,
+                  inquieta: true,
+                ),
               ],
             ),
             const SizedBox(height: 20),

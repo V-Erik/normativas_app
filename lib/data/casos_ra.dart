@@ -172,8 +172,9 @@ class CasosRA {
         ),
         OpcionNorma(
           'ISO 29119',
-          'Las pruebas vienen después. Primero hay que decidir qué '
-              'información proteges y de qué la proteges.',
+          'Las pruebas vienen después, y van a hacer falta. Pero antes '
+              'hay que decidir qué información proteges y de qué: eso es la '
+              '27001, y sin ese marco no sabes ni qué tienes que probar.',
         ),
       ],
       primerPaso: 'Define el alcance del SGSI (qué sistemas y qué datos '
@@ -217,7 +218,8 @@ class CasosRA {
         OpcionNorma(
           'Scrum',
           'Scrum te dice cómo organizar al equipo, no qué tienes que '
-              'proteger. Es una pregunta distinta.',
+              'proteger. Aquí mueves dinero de terceros, así que esa '
+              'pregunta la contesta la 27001.',
         ),
       ],
       primerPaso: 'Haz el análisis de riesgos: qué activo, qué amenaza y qué '
@@ -255,14 +257,17 @@ class CasosRA {
         ),
         OpcionNorma(
           'ISO 27001',
-          'Aquí no hay datos críticos. Cuidado con cargarle seguridad '
-              'pesada a una ferretería: cuesta dinero y no resuelve su '
-              'problema real.',
+          'Aquí no hay datos críticos, y cargarle seguridad pesada a '
+              'una ferretería cuesta dinero sin resolver su problema. Lo '
+              'que está roto es el proceso de pedido, y eso lo ordena la '
+              '9001.',
         ),
         OpcionNorma(
           'ISO 12207',
-          'Es demasiada norma para una tienda pequeña. La 12207 ordena el '
-              'ciclo de vida de proyectos bastante más grandes.',
+          'Es demasiada norma para una tienda pequeña: la 12207 ordena '
+              'el ciclo de vida de proyectos bastante más grandes. Lo que '
+              'falta aquí es poner por escrito el proceso de pedido, que es '
+              'terreno de la 9001.',
         ),
       ],
       primerPaso: 'Dibuja el proceso de pedido tal como ocurre hoy, con sus '
@@ -293,8 +298,10 @@ class CasosRA {
       opciones: [
         OpcionNorma(
           'ISO 9001',
-          'Certifica cómo trabaja la empresa, no cómo se construye este '
-              'software. Y aquí un fallo puede herir a alguien.',
+          'Certifica cómo trabaja la empresa, no cómo se construye '
+              'este software, y aquí un fallo puede herir a alguien. Los '
+              'procesos de ciclo de vida y de verificación que hacen falta '
+              'los define la 12207.',
         ),
         OpcionNorma(
           'ISO 12207',
@@ -337,8 +344,10 @@ class CasosRA {
       opciones: [
         OpcionNorma(
           'Waterfall',
-          'Con requisitos que van a cambiar cada semana, cerrar el alcance '
-              'al principio es la forma más rápida de llegar tarde.',
+          'Con requisitos que van a cambiar cada semana, cerrar el '
+              'alcance al principio es la forma más rápida de llegar tarde. '
+              'Con esa incertidumbre lo que encaja es Scrum: entregas '
+              'cortas y corregir el rumbo cada sprint.',
         ),
         OpcionNorma(
           'Scrum',
@@ -348,8 +357,9 @@ class CasosRA {
         ),
         OpcionNorma(
           'ISO 9001',
-          'Es una norma para una organización, no un marco para que cuatro '
-              'personas se repartan el trabajo del semestre.',
+          'Es una norma para una organización, no un marco para que '
+              'cuatro personas se repartan el trabajo del semestre. Para '
+              'eso está Scrum: roles, sprints y un backlog priorizado.',
         ),
       ],
       primerPaso: 'Reparte los tres roles, acuerda sprints de dos semanas y '
@@ -381,8 +391,10 @@ class CasosRA {
       opciones: [
         OpcionNorma(
           'Scrum',
-          'Puedes organizar el trabajo así, pero la migración no es una '
-              'función nueva del producto: es gestión de la configuración.',
+          'Puedes organizar el trabajo así, pero la migración no es '
+              'una función nueva del producto: es gestión de la '
+              'configuración, y esa vive en los procesos de soporte de la '
+              '12207.',
         ),
         OpcionNorma(
           'ISO 12207',
@@ -392,8 +404,10 @@ class CasosRA {
         ),
         OpcionNorma(
           'ISO 25010',
-          'Mide la calidad del producto terminado; no te ayuda a mover un '
-              'sistema vivo sin tumbarlo.',
+          'Mide la calidad del producto terminado; no te ayuda a mover '
+              'un sistema vivo sin tumbarlo. Mover algo que ya está en '
+              'marcha es un proceso de soporte, y esos los define la '
+              '12207.',
         ),
       ],
       primerPaso: 'Levanta el inventario y la línea base de configuración de '
@@ -425,9 +439,10 @@ class CasosRA {
       opciones: [
         OpcionNorma(
           'ISO 29119',
-          'Vas bien encaminado: lo normal es que falte un nivel de prueba. '
-              'Pero antes de cambiar nada hay que medir por dónde se están '
-              'escapando.',
+          'Vas bien encaminado: lo normal es que falte un nivel de '
+              'prueba. Pero antes de cambiar nada hay que medir por dónde '
+              'se escapan los defectos, y eso son las métricas: defect '
+              'density y defect escape rate.',
         ),
         OpcionNorma(
           'Métricas de calidad',
@@ -438,8 +453,9 @@ class CasosRA {
         ),
         OpcionNorma(
           'ISO 9001',
-          'Certificar el proceso no encuentra defectos. Primero el dato y '
-              'después el proceso, no al revés.',
+          'Certificar el proceso no encuentra defectos. Primero el '
+              'dato y después el proceso: mide el defect escape rate y ahí '
+              'verás si el agujero está en el código o en las pruebas.',
         ),
       ],
       primerPaso: 'Cuenta cuántos defectos encuentra el equipo y cuántos '
@@ -470,8 +486,10 @@ class CasosRA {
       opciones: [
         OpcionNorma(
           'Scrum',
-          'Scrum ya les dice que hagan la retrospectiva, y la hacen. El '
-              'problema es qué pasa después, y eso el marco no lo cubre.',
+          'Scrum ya les dice que hagan la retrospectiva, y la hacen. '
+              'El problema es qué pasa después, y eso el marco no lo cubre: '
+              'hace falta mejora continua, con acciones que tengan dueño y '
+              'fecha.',
         ),
         OpcionNorma(
           'Mejora continua',
@@ -482,8 +500,10 @@ class CasosRA {
         ),
         OpcionNorma(
           'ISO 25010',
-          'Mide el producto, no cómo trabaja el equipo. Aquí el que falla '
-              'es el proceso.',
+          'Mide el producto, no cómo trabaja el equipo, y aquí el que '
+              'falla es el proceso. Lo que cierra el ciclo es la mejora '
+              'continua: cada hallazgo convertido en una acción con '
+              'responsable y una señal de que funcionó.',
         ),
       ],
       primerPaso: 'Convierte cada hallazgo en una acción con dueño, fecha y '

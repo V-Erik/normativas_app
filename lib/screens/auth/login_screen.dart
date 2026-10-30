@@ -69,6 +69,38 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  /// Abre el diálogo de recuperación y, si se envió el correo, lo confirma.
+  ///
+  /// El aviso dice "si esa cuenta existe" a propósito: Firebase responde
+  /// igual tanto si el correo está registrado como si no, para no revelar
+  /// qué direcciones tienen cuenta. Prometer "te enviamos un correo" sería
+  /// mentir la mitad de las veces.
+  Future<void> _recuperarContrasena() async {
+    FocusScope.of(context).unfocus();
+
+    final enviado = await showDialog<bool>(
+      context: context,
+      builder: (_) => _DialogoRecuperar(
+        correoInicial: _emailController.text.trim(),
+      ),
+    );
+
+    if (enviado != true || !mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppColors.primaryGreen,
+        duration: Duration(seconds: 6),
+        content: Text(
+          'Si esa cuenta existe, te llegará un correo con el enlace para '
+          'crear una contraseña nueva. Revisa también la carpeta de spam.',
+          style: TextStyle(color: Colors.white, height: 1.35),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -172,7 +204,30 @@ class _LoginScreenState extends State<LoginScreen> {
                                       width: double.infinity,
                                       onPressed: _iniciarSesion,
                                     ),
-                              const SizedBox(height: 18),
+
+                              // Va aquí arriba y no al final a propósito:
+                              // quien se queda fuera es porque falló la
+                              // contraseña, y el enlace tiene que estar
+                              // donde está mirando, no debajo del registro.
+                              const SizedBox(height: 16),
+                              GestureDetector(
+                                onTap: _cargando ? null : _recuperarContrasena,
+                                behavior: HitTestBehavior.opaque,
+                                child: const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 4),
+                                  child: Text(
+                                    '¿Olvidaste tu contraseña?',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: AppColors.deepPurple,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(height: 14),
                               GestureDetector(
                                 onTap: _irARegistro,
                                 child: RichText(
@@ -210,7 +265,173 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-/// Caja de error compartida por login y registro.
+// ==========================================================================
+// RECUPERAR CONTRASEÑA
+// ==========================================================================
+
+/// Pide el correo y manda el enlace de restablecimiento de Firebase.
+///
+/// Devuelve `true` por `Navigator.pop` cuando el envío salió bien, para que
+/// la pantalla de login muestre el aviso. El diálogo se queda abierto si
+/// hubo error, así el estudiante puede corregir el correo sin volver a
+/// abrirlo.
+class _DialogoRecuperar extends StatefulWidget {
+  final String correoInicial;
+
+  const _DialogoRecuperar({required this.correoInicial});
+
+  @override
+  State<_DialogoRecuperar> createState() => _DialogoRecuperarState();
+}
+
+class _DialogoRecuperarState extends State<_DialogoRecuperar> {
+  late final TextEditingController _correo =
+      TextEditingController(text: widget.correoInicial);
+
+  bool _enviando = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _correo.dispose();
+    super.dispose();
+  }
+
+  Future<void> _enviar() async {
+    final correo = _correo.text.trim().toLowerCase();
+    if (!correo.contains('@')) {
+      setState(() => _error = 'Escribe un correo válido.');
+      return;
+    }
+
+    setState(() {
+      _enviando = true;
+      _error = null;
+    });
+
+    final fallo = await AuthService.instance.enviarCorreoDeRecuperacion(correo);
+    if (!mounted) return;
+
+    if (fallo != null) {
+      setState(() {
+        _enviando = false;
+        _error = fallo;
+      });
+      return;
+    }
+
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+      ),
+      title: const Text(
+        'Recuperar contraseña',
+        style: TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w800,
+          color: AppColors.textDark,
+        ),
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Escribe tu correo institucional y te enviaremos un enlace '
+              'para crear una contraseña nueva.',
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.45,
+                color: AppColors.textGrey,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _correo,
+              enabled: !_enviando,
+              autofocus: true,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _enviando ? null : _enviar(),
+              decoration: InputDecoration(
+                hintText: 'nombre.apellido@upec.edu.ec',
+                hintStyle: const TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textGrey,
+                ),
+                prefixIcon: const Icon(Icons.email_rounded, size: 20),
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(
+                    color: AppColors.deepPurple,
+                    width: 1.6,
+                  ),
+                ),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 14),
+              _CajaError(mensaje: _error!),
+            ],
+          ],
+        ),
+      ),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+      actions: [
+        TextButton(
+          onPressed: _enviando ? null : () => Navigator.of(context).pop(false),
+          child: const Text(
+            'Cancelar',
+            style: TextStyle(
+              color: AppColors.textGrey,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        ElevatedButton(
+          onPressed: _enviando ? null : _enviar,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.deepPurple,
+            foregroundColor: Colors.white,
+            disabledBackgroundColor: AppColors.deepPurple,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: _enviando
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.4,
+                    valueColor: AlwaysStoppedAnimation(Colors.white),
+                  ),
+                )
+              : const Text(
+                  'Enviar',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Caja de error compartida por login, registro y el diálogo de
+/// recuperación.
 class _CajaError extends StatelessWidget {
   final String mensaje;
   const _CajaError({required this.mensaje});

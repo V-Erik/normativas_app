@@ -1,68 +1,79 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:lottie/lottie.dart';
 
-/// Mascota ESO animada con Lottie.
+import 'mascota_viva.dart';
+
+/// La mascota ESO de las pantallas de inicio, lecciones y sílabo.
 ///
-/// Reproduce la animación una vez al aparecer y luego se queda quieta en el
-/// último fotograma. Si [saludoPeriodico] es true, vuelve a animarse cada
-/// [intervalo], lo que da sensación de vida sin molestar durante la lectura.
-class MascotaESO extends StatefulWidget {
+/// ESTO YA NO USA LOTTIE
+/// ---------------------
+/// Antes reproducía `Frame_1.json` una vez al aparecer y se quedaba
+/// congelada en el último fotograma; con `saludoPeriodico` volvía a
+/// reproducir **la misma** animación cada doce segundos, que es lo que la
+/// delataba: no parecía viva, parecía un bucle.
+///
+/// Ahora dibuja [MascotaViva], el mismo personaje montado con las capas
+/// sueltas de aquel propio Lottie. Esa sí flota, respira, parpadea a
+/// intervalos irregulares y, con [saludoPeriodico], se brinca, se ladea o
+/// se estira cada cierto tiempo sin repetir siempre el mismo gesto.
+///
+/// POR QUÉ SIGUE EXISTIENDO ESTA CLASE
+/// -----------------------------------
+/// La llaman siete sitios de cuatro pantallas. Convertirla en un
+/// adaptador cambia el personaje en toda la aplicación tocando un solo
+/// archivo; reescribir las siete llamadas haría lo mismo con siete veces
+/// más superficie para equivocarse.
+///
+/// LA CAJA ES LA DE ANTES, AL PÍXEL
+/// --------------------------------
+/// Ocupa `size` de ancho por `size * 1.15` de alto, exactamente como la
+/// versión de Lottie. Eso es lo que permite que ninguna pantalla se mueva:
+/// el personaje de dentro es más estrecho que su hueco —mide 0,4234 de su
+/// altura— y se centra, igual que hacía el `BoxFit.contain`.
+class MascotaESO extends StatelessWidget {
   final double size;
+
+  /// Con true se mueve por su cuenta cada tanto.
+  ///
+  /// El nombre se conserva por las llamadas que ya existen, pero lo que
+  /// hace es otra cosa: antes repetía la animación de entrada, ahora
+  /// sortea un gesto distinto cada vez.
   final bool saludoPeriodico;
+
+  /// Una reacción puntual: salta al acertar, se sacude al fallar.
+  ///
+  /// Se dispara al construirse, de modo que sirve en un diálogo que
+  /// aparece ya sabiendo cómo fue la cosa.
+  final GestoMascota gesto;
+
+  /// Se mantiene por compatibilidad y ya no se usa.
+  ///
+  /// [MascotaViva] sortea sus propios intervalos, y a propósito: un gesto
+  /// cada N segundos exactos se lee como un reloj, que es justo el
+  /// defecto que esto venía a corregir.
   final Duration intervalo;
 
   const MascotaESO({
     super.key,
     this.size = 110,
     this.saludoPeriodico = false,
+    this.gesto = GestoMascota.reposo,
     this.intervalo = const Duration(seconds: 12),
   });
 
   @override
-  State<MascotaESO> createState() => _MascotaESOState();
-}
-
-class _MascotaESOState extends State<MascotaESO>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(vsync: this);
-
-    if (widget.saludoPeriodico) {
-      _timer = Timer.periodic(widget.intervalo, (_) {
-        if (mounted && !_controller.isAnimating) {
-          _controller.forward(from: 0);
-        }
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final alto = size * 1.15;
+
     return SizedBox(
-      width: widget.size,
-      height: widget.size * 1.15,
-      child: Lottie.asset(
-        'assets/animations/Frame_1.json',
-        controller: _controller,
-        fit: BoxFit.contain,
-        onLoaded: (composition) {
-          _controller
-            ..duration = composition.duration
-            ..forward(from: 0);
-        },
+      width: size,
+      height: alto,
+      child: Center(
+        child: MascotaViva(
+          size: alto,
+          completa: true,
+          inquieta: saludoPeriodico,
+          gesto: gesto,
+        ),
       ),
     );
   }
@@ -98,10 +109,12 @@ class MascotaESOBurbuja extends StatelessWidget {
               color: Colors.white,
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                  color: colorBurbuja.withOpacity(0.22), width: 1.5),
+                color: colorBurbuja.withValues(alpha: 0.22),
+                width: 1.5,
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.03),
+                  color: Colors.black.withValues(alpha: 0.03),
                   blurRadius: 10,
                   offset: const Offset(0, 3),
                 ),

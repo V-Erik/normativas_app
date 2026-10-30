@@ -191,6 +191,28 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
+    /// Envía el correo de restablecimiento de contraseña de Firebase.
+  ///
+  /// Devuelve null si salió bien, o el mensaje de error.
+  ///
+  /// Si la cuenta no existe se devuelve null igual, como si se hubiera
+  /// enviado: confirmar qué correos están registrados sería filtrar datos
+  /// de los estudiantes. Firebase moderno ya se comporta así por su
+  /// cuenta, y la pantalla lo dice como "si esa cuenta existe".
+  Future<String?> enviarCorreoDeRecuperacion(String email) async {
+    try {
+      await _firebase.sendPasswordResetEmail(
+        email: email.trim().toLowerCase(),
+      );
+      return null;
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'user-not-found') return null;
+      return _mensajeDeFirebase(e);
+    } catch (e) {
+      debugPrint('Auth: fallo al enviar el correo de recuperación -> $e');
+      return 'No se pudo enviar el correo. Revisa tu conexión a internet.';
+    }
+  }
   /// Token de Firebase listo para la cabecera `Authorization`.
   /// Se pide justo antes de cada petición, no se guarda: caduca a la hora
   /// y el SDK lo renueva solo.

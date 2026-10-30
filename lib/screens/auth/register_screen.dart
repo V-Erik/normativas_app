@@ -43,8 +43,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
 
     final resultado = await AuthService.instance.registrar(
-      nombre: _nombreController.text,
-      email: _emailController.text,
+      nombre: _nombreController.text.trim(),
+      email: _emailController.text.trim().toLowerCase(),
       password: _passwordController.text,
     );
 
@@ -124,10 +124,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 controller: _nombreController,
                                 label: 'Nombre completo',
                                 icon: Icons.person_rounded,
-                                validator: (v) =>
-                                    (v == null || v.trim().length < 3)
-                                        ? 'Ingresa tu nombre completo'
-                                        : null,
+                                validator: (v) => (v == null || v.trim().length < 3)
+                                    ? 'Ingresa tu nombre'
+                                    : null,
                               ),
                               const SizedBox(height: 16),
                               NeumorphicTextField(
@@ -135,10 +134,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 label: 'Correo electrónico',
                                 icon: Icons.email_rounded,
                                 keyboardType: TextInputType.emailAddress,
-                                validator: (v) =>
-                                    (v == null || !v.contains('@'))
-                                        ? 'Ingresa un correo válido'
-                                        : null,
+                                validator: (v) {
+                                  final correo = (v ?? '').trim().toLowerCase();
+                                  if (!correo.contains('@')) return 'Ingresa un correo válido';
+                                  if (!correo.endsWith('@upec.edu.ec')) {
+                                    return 'Usa tu correo institucional @upec.edu.ec';
+                                  }
+                                  return null;
+                                },
                               ),
                               const SizedBox(height: 16),
                               NeumorphicTextField(

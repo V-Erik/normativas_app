@@ -10,10 +10,12 @@ import '../data/casos_ra.dart';
 import '../services/chat_service.dart';
 import '../services/escaneos_ra_service.dart';
 import '../services/progreso_service.dart';
+import '../services/voz_mascota.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ancla_ra.dart';
 import '../widgets/mascota_viva.dart';
 import 'lesson_screen_v3.dart';
+import 'tarjetas_ra_screen.dart';
 
 /// Realidad aumentada sobre marcadores impresos.
 ///
@@ -72,6 +74,33 @@ class _Sesion {
   _Sesion(this.caso) : momento = _Momento.encargo;
 }
 
+/// Lo que la mascota dice en cada momento de la conversación.
+///
+/// Vive aquí y no dentro del globo porque lo usan dos: el globo para
+/// escribirlo y la voz para leerlo. Con un switch en cada sitio, lo que
+/// se oye y lo que se lee acaban separándose en cuanto alguien toque uno
+/// de los dos.
+String _textoDelMomento(_Sesion s) => switch (s.momento) {
+      _Momento.encargo => s.caso.enganche,
+      _Momento.pregunta => '¿Qué normativa aplicarías aquí?',
+      _Momento.reaccion => s.elegida?.reaccion ?? '',
+      _Momento.consejo => s.caso.primerPaso,
+    };
+
+/// La clave del clip de voz que corresponde a este momento.
+///
+/// Tiene que coincidir exactamente con la que calcula `generar_voces.py`
+/// al nombrar los MP3. Si aquí se renombra una, allí deja de encontrarse
+/// su clip y esa frase pasa a leerla el motor del teléfono: se degrada,
+/// no se rompe, que es lo que se busca.
+String _claveDeVoz(_Sesion s) => switch (s.momento) {
+      _Momento.encargo => '${s.caso.id}__enganche',
+      _Momento.pregunta => '__pregunta',
+      _Momento.reaccion =>
+        '${s.caso.id}__op${s.caso.opciones.indexOf(s.elegida!)}',
+      _Momento.consejo => '${s.caso.id}__paso',
+    };
+
 /// Lo que se publica a cada fotograma para mover el contenido.
 @immutable
 class _Vista {
@@ -81,7 +110,19 @@ class _Vista {
   /// abierta: entonces el contenido se congela donde estaba.
   final bool siguiendo;
 
-  const _Vista(this.ancla, this.siguiendo);
+  /// Cuánto está enderezado el contenido respecto del plano del papel.
+  /// 0 = tumbado sobre la mesa, 1 = de frente a la cámara. Se anima entre
+  /// los dos valores, así que vive aquí y no en el estado: cambia a cada
+  /// fotograma y solo tiene que repintar el contenido aumentado.
+  final double aplanado;
+
+  const _Vista(this.ancla, this.siguiendo, this.aplanado);
+
+  _Vista con({AnclaRA? ancla, bool? siguiendo, double? aplanado}) => _Vista(
+        ancla ?? this.ancla,
+        siguiendo ?? this.siguiendo,
+        aplanado ?? this.aplanado,
+      );
 }
 
 class _ArScannerScreenState extends State<ArScannerScreen>
@@ -92,15 +133,47 @@ class _ArScannerScreenState extends State<ArScannerScreen>
   /// la mascota estaría apareciendo y desapareciendo.
   static const _tolerancia = Duration(milliseconds: 900);
 
-  /// Cuánto se queda congelada una conversación abierta después de perder
-  /// el marcador. Más que la tolerancia, porque aquí el estudiante puede
+  /// Cuánto aguanta una conversación abierta después de perder el
+  /// marcador. Más que la tolerancia, porque aquí el estudiante puede
   /// estar leyendo o buscando el botón; pero no para siempre, o el globo
   /// se quedaría flotando sobre una pared.
   static const _abandono = Duration(seconds: 8);
 
+  /// Lo mismo, pero cuando la conversación ya llegó al consejo.
+  ///
+  /// Los ocho segundos existen para proteger a quien está a medio
+  /// responder y aparta la cámara un momento. Al final no hay nada que
+  /// proteger: lo único que hacen es estorbar a quien ya terminó y quiere
+  /// apuntar a la tarjeta siguiente. Apartar la cámara es entonces la
+  /// forma natural de decir «siguiente», y conviene que responda rápido.
+  static const _abandonoTerminado = Duration(milliseconds: 2200);
+
+  Duration get _esperaAntesDeSoltar => _sesion?.momento == _Momento.consejo
+      ? _abandonoTerminado
+      : _abandono;
+
   /// Suavizado del seguimiento, por fotograma. Más alto = sigue más
   /// pegado pero tiembla; más bajo = más suave pero va por detrás.
-  static const _suavizado = 0.28;
+  ///
+  /// Subido de 0,28 a 0,38: con el teléfono quieto tiembla un pelo más,
+  /// pero el muñeco flota por su cuenta y su sombra es difusa, así que
+  /// ese temblor no se aprecia. El arrastre al girar sí se apreciaba.
+  static const _suavizado = 0.38;
+
+  /// Cuánto se endereza el contenido mientras se lee el encargo.
+  ///
+  /// Ni 0 ni 1. Tumbado del todo, el escorzo se come el texto cuando la
+  /// mesa se mira desde arriba, que es como se mira una mesa. De frente
+  /// del todo es la calcomanía de antes. En medio se lee sin esfuerzo y
+  /// se sigue viendo que la tarjeta está apoyada en el papel.
+  ///
+  /// Con la sombra de contacto a los pies del muñeco se puede tumbar más
+  /// que sin ella: el apoyo ya no depende solo del escorzo.
+  static const _apoyado = 0.30;
+
+  /// Velocidad con la que la tarjeta se levanta de la mesa al pasar a la
+  /// pregunta, por fotograma.
+  static const _enderezamiento = 0.12;
 
   late final MobileScannerController _camara = MobileScannerController(
     // Manda la pantalla, no el controlador: la cámara solo arranca cuando
@@ -109,11 +182,16 @@ class _ArScannerScreenState extends State<ArScannerScreen>
     // Solo QR. Buscar los otros catorce formatos en cada fotograma gasta
     // CPU para nada.
     formats: const [BarcodeFormat.qrCode],
-    // 10 detecciones por segundo. Con `unrestricted` (cada fotograma) el
-    // seguimiento no mejora a la vista y los teléfonos modestos se
-    // calientan; el movimiento fino lo pone el suavizado.
+    // Unas dieciséis detecciones por segundo. Con `unrestricted` (cada
+    // fotograma) los teléfonos modestos se calientan y el seguimiento no
+    // mejora tanto; el movimiento fino lo pone el suavizado.
+    //
+    // Estaba en 100 ms, y ahí se notaba al girar: mientras la imagen va
+    // movida el código no se decodifica, y cuanto más separadas van las
+    // lecturas más dura el hueco en el que el muñeco se queda con la
+    // última pose buena.
     detectionSpeed: DetectionSpeed.normal,
-    detectionTimeoutMs: 100,
+    detectionTimeoutMs: 60,
   );
 
   Ticker? _reloj;
@@ -128,6 +206,28 @@ class _ArScannerScreenState extends State<ArScannerScreen>
 
   AnclaRA? _destino;
   CasoRA? _casoDestino;
+
+  /// Un salto grande no se aplica a la primera: se anota aquí y hace
+  /// falta una segunda detección que lo confirme.
+  ///
+  /// Con un movimiento brusco la imagen sale movida y el lector puede
+  /// devolver una posición disparatada durante un solo fotograma. Sin
+  /// esto, el muñeco se iba de un salto y volvía al fotograma siguiente.
+  AnclaRA? _candidato;
+  DateTime _candidatoDesde = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Cuánto vale un candidato antes de olvidarlo. Dos detecciones seguidas
+  /// llegan en unos 100 ms; con este margen caben tres o cuatro.
+  static const _confirmacion = Duration(milliseconds: 420);
+
+  /// Hacia dónde tiende el enderezado. Durante el encargo la tarjeta se
+  /// queda apoyada en la mesa; en cuanto hay que elegir entre tres
+  /// opciones se pone de frente, porque ahí se lee y se pulsa.
+  double get _aplanadoObjetivo {
+    final s = _sesion;
+    if (s == null) return _apoyado;
+    return s.momento == _Momento.encargo ? _apoyado : 1.0;
+  }
   DateTime _ultimaDeteccion = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Tamaño real del hueco donde se dibuja la cámara. Hace falta para
@@ -138,6 +238,24 @@ class _ArScannerScreenState extends State<ArScannerScreen>
   /// Mientras la ficha está abierta no se sigue el marcador: el
   /// estudiante está leyendo.
   bool _fichaAbierta = false;
+
+  /// Si el contenido debe quedarse quieto en lugar de seguir al marcador.
+  ///
+  /// Antes esto se activaba también a partir de la pregunta, porque el
+  /// texto colgaba del marcador y perder el globo mientras el estudiante
+  /// alargaba el dedo era perderle la respuesta: es lo que la validación
+  /// describió como «es muy difícil escoger la respuesta porque cambia
+  /// muy fácil».
+  ///
+  /// Ya no hace falta. El texto vive en un panel fijo abajo y no se mueve
+  /// pase lo que pase; lo único que sigue al marcador es el muñeco, y al
+  /// muñeco no hay que pulsarlo. Congelarlo había dejado de proteger nada
+  /// y era el motivo de que la conversación se quedara flotando en
+  /// pantalla al terminar, sin cerrarse nunca sola.
+  ///
+  /// Con la ficha abierta sí: ahí el estudiante está leyendo otra cosa y
+  /// el escaneo no debe correr por debajo.
+  bool get _congelado => _fichaAbierta;
 
   /// Caso que el estudiante cerró con la X. Se ignora mientras siga
   /// apuntando a esa misma tarjeta; si aparta la cámara un par de
@@ -164,6 +282,10 @@ class _ArScannerScreenState extends State<ArScannerScreen>
     });
 
     _reloj = createTicker(_latido);
+
+    // Busca una voz española en el motor del sistema. Si no la hay, la
+    // función queda deshabilitada y el botón ni siquiera aparece.
+    VozMascota.instance.preparar();
 
     // La cámara arranca después del primer fotograma: `MobileScanner`
     // tiene que estar montado para quedarse con la sesión de cámara, y si
@@ -248,6 +370,7 @@ class _ArScannerScreenState extends State<ArScannerScreen>
 
   @override
   void dispose() {
+    VozMascota.instance.callar();
     WidgetsBinding.instance.removeObserver(this);
     _olvidarDesconocido?.cancel();
     _reloj?.stop(canceled: true);
@@ -278,6 +401,23 @@ class _ArScannerScreenState extends State<ArScannerScreen>
       final caso = CasosRA.resolver(codigo.rawValue);
       if (caso == null) continue;
 
+      // Con una conversación abierta, otro marcador no la reemplaza.
+      // Nunca, tampoco en el último paso.
+      //
+      // Este era el defecto principal que reportó la validación: basta
+      // con que otra tarjeta de la mesa entre en el encuadre para que el
+      // caso en curso se reinicie y el estudiante pierda lo que estaba
+      // haciendo. Llegué a abrir una excepción para el consejo, pensando
+      // que ahí la conversación ya estaba terminada; no lo está. El
+      // consejo es donde está el texto que hay que leer y el botón de la
+      // ficha, así que leer ahí quedaba a merced de la tarjeta de al
+      // lado. Era el mismo defecto, desplazado al final.
+      //
+      // Para pasar a otro caso hay dos salidas, las dos del estudiante:
+      // la X del globo, o apartar la cámara (ver [_esperaAntesDeSoltar],
+      // que suelta enseguida cuando ya no queda nada que perder).
+      if (_sesion != null && caso.id != _sesion!.caso.id) continue;
+
       final ancla = AnclaRA.desde(captura, codigo, _tamanoVista);
       if (ancla == null) continue;
 
@@ -288,6 +428,25 @@ class _ArScannerScreenState extends State<ArScannerScreen>
         return;
       }
 
+      // Un salto grande respecto de donde está el contenido ahora mismo
+      // se trata como sospechoso hasta que una segunda detección lo
+      // confirme. Mientras tanto se cuenta como "visto", para que la
+      // pausa no empiece a correr y el contenido no se retire.
+      final mostrada = _vista.value?.ancla;
+      if (mostrada != null && mostrada.lejosDe(ancla)) {
+        final c = _candidato;
+        final caducado = ahora.difference(_candidatoDesde) > _confirmacion;
+        if (c == null || caducado || c.lejosDe(ancla)) {
+          _candidato = ancla;
+          _candidatoDesde = ahora;
+          _ultimaDeteccion = ahora;
+          return;
+        }
+        // Dos detecciones seguidas coinciden en el sitio nuevo: el
+        // teléfono se movió de verdad y el salto se acepta.
+      }
+      _candidato = null;
+
       _destino = ancla;
       _ultimaDeteccion = ahora;
 
@@ -296,8 +455,11 @@ class _ArScannerScreenState extends State<ArScannerScreen>
         // contenido se coloca de una vez, sin interpolar desde el sitio
         // donde estaba el anterior.
         _casoDestino = caso;
-        _vista.value = _Vista(ancla, true);
-        setState(() => _sesion = _Sesion(caso));
+        _vista.value = _Vista(ancla, true, _apoyado);
+        final nueva = _Sesion(caso);
+        setState(() => _sesion = nueva);
+        VozMascota.instance
+            .decir(_textoDelMomento(nueva), clave: _claveDeVoz(nueva));
       }
 
       if (!(_reloj?.isActive ?? false)) _reloj?.start();
@@ -321,6 +483,16 @@ class _ArScannerScreenState extends State<ArScannerScreen>
   void _latido(Duration _) {
     if (!mounted) return;
 
+    // El enderezado corre siempre, también con el contenido congelado:
+    // justo al congelar es cuando la tarjeta tiene que levantarse de la
+    // mesa, y si se saliera antes se levantaría de golpe.
+    _enderezar();
+
+    // Con el contenido congelado no se interpola ni se cuenta el abandono:
+    // el estudiante está decidiendo y perder el globo ahora significa
+    // perder la respuesta. La salida sigue siendo la X del propio globo.
+    if (_congelado) return;
+
     final actual = _vista.value;
     final destino = _destino;
     if (actual == null) {
@@ -339,11 +511,11 @@ class _ArScannerScreenState extends State<ArScannerScreen>
       // bastaría un reflejo para borrarle la pregunta al estudiante
       // mientras alarga el dedo para contestarla. Pero solo un rato: si
       // deja de apuntar de verdad, se retira igual.
-      if (_sesion == null || fuera > _abandono) {
+      if (_sesion == null || fuera > _esperaAntesDeSoltar) {
         _cerrarSesion();
         return;
       }
-      if (actual.siguiendo) _vista.value = _Vista(actual.ancla, false);
+      if (actual.siguiendo) _vista.value = actual.con(siguiendo: false);
       return;
     }
 
@@ -353,12 +525,28 @@ class _ArScannerScreenState extends State<ArScannerScreen>
         ? destino
         : actual.ancla.haciaDestino(destino, _suavizado);
 
-    _vista.value = _Vista(siguiente, true);
+    _vista.value = _Vista(siguiente, true, actual.aplanado);
+  }
+
+  /// Acerca el enderezado a su objetivo, un poco por fotograma.
+  void _enderezar() {
+    final v = _vista.value;
+    if (v == null) return;
+    final falta = _aplanadoObjetivo - v.aplanado;
+    if (falta.abs() < 0.004) {
+      if (v.aplanado != _aplanadoObjetivo) {
+        _vista.value = v.con(aplanado: _aplanadoObjetivo);
+      }
+      return;
+    }
+    _vista.value = v.con(aplanado: v.aplanado + falta * _enderezamiento);
   }
 
   void _cerrarSesion() {
+    VozMascota.instance.callar();
     _destino = null;
     _casoDestino = null;
+    _candidato = null;
     _vista.value = null;
     _reloj?.stop();
     if (_sesion != null && mounted) setState(() => _sesion = null);
@@ -387,6 +575,13 @@ class _ArScannerScreenState extends State<ArScannerScreen>
   void _avanzar() {
     final s = _sesion;
     if (s == null) return;
+
+    // El contorno del QR se atenúa al congelar, igual que cuando se pierde
+    // el marcador: es la señal de que lo que hay en pantalla ya no está
+    // siguiendo al papel y el estudiante puede bajar el teléfono.
+    final v = _vista.value;
+    if (v != null && v.siguiendo) _vista.value = v.con(siguiendo: false);
+
     setState(() {
       s.momento = switch (s.momento) {
         _Momento.encargo => _Momento.pregunta,
@@ -395,6 +590,9 @@ class _ArScannerScreenState extends State<ArScannerScreen>
         _Momento.consejo => _Momento.consejo,
       };
     });
+
+    VozMascota.instance
+        .decir(_textoDelMomento(s), clave: _claveDeVoz(s));
   }
 
   Future<void> _elegir(OpcionNorma opcion) async {
@@ -405,6 +603,10 @@ class _ArScannerScreenState extends State<ArScannerScreen>
       s.elegida = opcion;
       s.momento = _Momento.reaccion;
     });
+
+    // La reacción es el texto que más importa que se oiga: es el que
+    // explica por qué esa normativa encaja o se queda corta.
+    VozMascota.instance.decir(_textoDelMomento(s), clave: _claveDeVoz(s));
 
     final primera = await EscaneosRAService.instance.registrarRespuesta(
       s.caso,
@@ -453,6 +655,7 @@ class _ArScannerScreenState extends State<ArScannerScreen>
   // ======================================================================
 
   Future<void> _abrirFicha(CasoRA caso) async {
+    VozMascota.instance.callar();
     setState(() => _fichaAbierta = true);
 
     await showModalBottomSheet<void>(
@@ -639,6 +842,43 @@ class _Cabecera extends StatelessWidget {
               ],
             ),
           ),
+          // El acceso a las hojas imprimibles vive aquí porque es aquí
+          // donde hace falta: quien está en el escáner sin tarjeta
+          // delante es exactamente quien necesita imprimirla.
+          IconButton(
+            tooltip: 'Tarjetas para imprimir',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const TarjetasRAScreen()),
+            ),
+            icon: const Icon(Icons.style_rounded, color: Colors.white70),
+          ),
+
+          // El altavoz solo aparece si este teléfono tiene instalada una
+          // voz en español. Ofrecer el botón y que luego lea en inglés
+          // sería peor que no ofrecerlo.
+          ValueListenableBuilder<bool>(
+            valueListenable: VozMascota.instance.disponible,
+            builder: (context, hayVoz, _) {
+              if (!hayVoz) return const SizedBox.shrink();
+              return ValueListenableBuilder<bool>(
+                valueListenable: VozMascota.instance.activa,
+                builder: (context, encendida, _) {
+                  return IconButton(
+                    tooltip: encendida
+                        ? 'Silenciar a la mascota'
+                        : 'Que la mascota lea en voz alta',
+                    onPressed: () => VozMascota.instance.alternar(),
+                    icon: Icon(
+                      encendida
+                          ? Icons.volume_up_rounded
+                          : Icons.volume_off_rounded,
+                      color: encendida ? AppColors.gold : Colors.white70,
+                    ),
+                  );
+                },
+              );
+            },
+          ),
           ValueListenableBuilder<MobileScannerState>(
             valueListenable: camara,
             builder: (context, estado, _) {
@@ -792,13 +1032,21 @@ class _PintaMira extends CustomPainter {
 /// inclina con el papel. Al acercar el teléfono crece, como crecería un
 /// objeto de verdad.
 ///
+/// El contenido no se dibuja de frente a la cámara, sino **en el plano del
+/// papel**: la homografía que sale de las cuatro esquinas del QR lo tumba
+/// sobre la mesa, con el borde lejano más corto que el cercano. Es la
+/// diferencia entre una calcomanía pegada al cristal y algo apoyado ahí.
+///
 /// Dos decisiones que parecen inconsistentes y no lo son:
 ///
-///   - El contorno del QR gira el ángulo **completo** del marcador, porque
-///     es la prueba visible de que el seguimiento es real.
-///   - El muñeco y el globo giran solo un tercio de ese ángulo y como
-///     mucho 12°. Leer tres líneas de texto inclinadas 30° mientras
-///     sostienes el teléfono es incómodo, y aquí hay que leer y pulsar.
+///   - El contorno del QR usa la pose **exacta**, sin enderezar. Tiene que
+///     encajar en el código hasta cuando la hoja está muy inclinada: es la
+///     prueba visible de que el seguimiento es real, y ahí no hay texto.
+///   - El muñeco y el globo van a medio enderezar mientras se lee el
+///     encargo, y se levantan del todo al pasar a la pregunta. Leer tres
+///     líneas escorzadas y acertarle a un botón de 38 px mientras sostienes
+///     el teléfono con la otra mano es justo lo que la validación describió
+///     como «es muy difícil escoger la respuesta porque cambia muy fácil».
 class _DialogoAnclado extends StatelessWidget {
   final _Vista vista;
   final _Sesion sesion;
@@ -822,52 +1070,81 @@ class _DialogoAnclado extends StatelessWidget {
   Widget build(BuildContext context) {
     final ancla = vista.ancla;
 
-    // --- Tamaños, derivados del marcador -------------------------------
-    // Los topes son lo que impide que el muñeco invada la pantalla al
-    // acercarse y que el globo se vuelva ilegible al alejarse.
-    final altoMascota = _entre(ancla.lado * 1.45, 96, 152);
-    final anchoGrupo = _entre(
-      ancla.lado * 3.6,
-      230,
-      math.min(300, tamanoVista.width - 24),
+    // --- Tamaños ---------------------------------------------------------
+    //
+    // El muñeco ya no comparte fila con el texto, así que su tamaño sale
+    // libre del marcador: ahí está la profundidad, y al acercar el
+    // teléfono crece como crecería algo que estuviera de verdad ahí.
+    final altoMascota = _entre(ancla.lado * 1.7, 58, 250);
+    final anchoMascota = MascotaViva.anchoDeCuerpo(altoMascota);
+
+    // El panel de texto mide siempre lo mismo y vive en coordenadas de
+    // pantalla, porque es lo único que hay que leer.
+    final anchoPanel = math.min(380.0, tamanoVista.width - 28);
+
+    // --- Colocación ------------------------------------------------------
+    //
+    // El muñeco NO se proyecta en el plano del papel. Esto es lo que
+    // estaba mal antes: un personaje que flota está derecho, y meterlo en
+    // la homografía de la mesa lo acuesta sobre ella, que es exactamente
+    // la lectura de calcomanía que se quería evitar. Va en coordenadas de
+    // pantalla, de pie, encima del marcador.
+    //
+    // Lo único que está de verdad sobre el papel es la sombra, y esa sí
+    // se proyecta (más abajo, con la pose exacta).
+    //
+    // Y el hueco entre los dos es lo que dice «flota»: con los pies
+    // pegados a la sombra se lee «apoyado»; separándolos, «suspendido
+    // ahí». La altura sale del lado del marcador para que se mantenga al
+    // acercarse y alejarse.
+    final alturaVuelo = ancla.lado * 0.42;
+
+    // Y «encima» quiere decir encima DE LA TARJETA, no de la pantalla.
+    // Con el papel de lado, el sitio donde flota el muñeco también está
+    // de lado. El eje vertical de la tarjeta apunta en pantalla hacia
+    // (sen θ, −cos θ); con θ = 0 eso es hacia arriba, como antes.
+    final pies = ancla.centro +
+        Offset(math.sin(ancla.angulo), -math.cos(ancla.angulo)) *
+            alturaVuelo;
+
+    // Sujeto dentro del encuadre en los dos ejes: ahora el vuelo puede
+    // apuntar a cualquier sitio, así que ya no basta con vigilar los
+    // lados. El punto es el de los pies, y el cuerpo sube desde ahí.
+    final px = _entre(
+      pies.dx,
+      anchoMascota / 2 + 8,
+      math.max(
+        anchoMascota / 2 + 8,
+        tamanoVista.width - anchoMascota / 2 - 8,
+      ),
+    );
+    final py = _entre(
+      pies.dy,
+      math.min(altoMascota + 8, tamanoVista.height - 8),
+      tamanoVista.height - 8,
     );
 
-    // --- Colocación -----------------------------------------------------
-    // Si el marcador está en la mitad de abajo, el grupo va encima; si
-    // está arriba, debajo. Así nunca se sale por un borde de la pantalla.
-    final arriba = ancla.centro.dy > tamanoVista.height * 0.42;
-
-    // El grupo se centra en el marcador, pero sin salirse de la pantalla.
-    // El contorno del QR no se clampa: ese tiene que caer exacto sobre el
-    // código aunque esté medio fuera de cuadro.
-    final cx = _entre(
-      ancla.centro.dx,
-      anchoGrupo / 2 + 8,
-      math.max(anchoGrupo / 2 + 8, tamanoVista.width - anchoGrupo / 2 - 8),
-    );
-
-    final anguloSuave = _entre(ancla.angulo * 0.35, -0.21, 0.21);
-
-    final marcador = Matrix4.translationValues(
-      ancla.centro.dx,
-      ancla.centro.dy,
-      0,
-    ).multiplied(Matrix4.rotationZ(ancla.angulo));
-
-    final grupo = Matrix4.translationValues(cx, ancla.centro.dy, 0)
-        .multiplied(Matrix4.rotationZ(anguloSuave));
+    // El giro, entero. Al girar el teléfono, algo que estuviera de verdad
+    // sobre la mesa giraría con ella, y eso es lo que tiene que hacer el
+    // muñeco. Antes iba al 45 % y se anulaba al pasar a la pregunta,
+    // porque llevaba el texto encima y un párrafo del revés no se lee; el
+    // texto se fue al panel de abajo, que no gira nunca.
+    final inclina = ancla.angulo;
 
     return Stack(
       children: [
-        // 1. El contorno sobre el QR. Confirma que la app está viendo la
-        //    tarjeta y es lo que delataría un anclaje descuadrado. Se
-        //    atenúa cuando se pierde el código, para que el estudiante
-        //    sepa que lo que queda en pantalla está congelado.
+        // 1. El contorno sobre el QR, con la pose exacta y sin enderezar:
+        //    se dibuja como un cuadrilátero en perspectiva, encajado en el
+        //    código aunque la hoja esté muy inclinada. Confirma que la app
+        //    está viendo la tarjeta y es lo que delataría un anclaje
+        //    descuadrado. Se atenúa cuando se pierde el código, para que
+        //    el estudiante sepa que lo que queda en pantalla está
+        //    congelado.
         Positioned(
           left: 0,
           top: 0,
           child: Transform(
-            transform: marcador,
+            transform: ancla.matriz,
             child: FractionalTranslation(
               translation: const Offset(-0.5, -0.5),
               child: IgnorePointer(
@@ -891,48 +1168,82 @@ class _DialogoAnclado extends StatelessWidget {
           ),
         ),
 
-        // 2. El muñeco y su globo, de pie junto al marcador.
+        // 2. La sombra, en el plano del papel.
+        //
+        //    Es lo único de toda la escena que está realmente sobre la
+        //    hoja, así que es lo único que se dibuja con la homografía
+        //    del marcador: se deforma con la perspectiva de la mesa y se
+        //    inclina con ella. Aquí va la pose exacta, sin enderezar.
         Positioned(
           left: 0,
           top: 0,
-          child: Transform(
-            transform: grupo,
-            child: Transform.translate(
-              offset: Offset(0, ancla.lado * (arriba ? -0.52 : 0.52)),
+          child: IgnorePointer(
+            child: Transform(
+              transform: ancla.matriz,
               child: FractionalTranslation(
-                translation: Offset(-0.5, arriba ? -1.0 : 0.0),
-                child: SizedBox(
-                  width: anchoGrupo,
-                  child: Row(
-                    // Arriba y no abajo: el globo tiene que salir a la
-                    // altura de la cabeza, no de los pies.
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      MascotaViva(
-                        size: altoMascota,
-                        completa: true,
-                        pensando: sesion.momento == _Momento.pregunta,
-                      ),
-                      Padding(
-                        padding: EdgeInsets.only(top: altoMascota * 0.17),
-                        child: CustomPaint(
-                          size: const Size(9, 16),
-                          painter: _PintaPico(),
-                        ),
-                      ),
-                      Expanded(
-                        child: _Globo(
-                          sesion: sesion,
-                          onAvanzar: onAvanzar,
-                          onElegir: onElegir,
-                          onFicha: onFicha,
-                          onCerrar: onCerrar,
-                        ),
-                      ),
-                    ],
+                translation: const Offset(-0.5, -0.5),
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 180),
+                  opacity: vista.siguiendo ? 1 : 0.4,
+                  child: _SombraEnElPlano(
+                    ancho: anchoMascota * 1.3,
+                    alto: anchoMascota * 1.3 * 0.42,
                   ),
                 ),
               ),
+            ),
+          ),
+        ),
+
+        // 3. El muñeco, de pie y flotando por encima del marcador.
+        Positioned(
+          left: 0,
+          top: 0,
+          child: Transform.translate(
+            offset: Offset(px, py),
+            child: FractionalTranslation(
+              // Los pies justo encima de la sombra, el cuerpo hacia arriba.
+              translation: const Offset(-0.5, -1.0),
+              child: Transform.rotate(
+                angle: inclina,
+                alignment: Alignment.bottomCenter,
+                child: MascotaViva(
+                  size: altoMascota,
+                  completa: true,
+                  pensando: sesion.momento == _Momento.pregunta,
+                  // Salta al acertar y se sacude al fallar. El gesto se
+                  // dispara cuando cambia, así que llegar a la reacción lo
+                  // reproduce una vez y ya.
+                  gesto: sesion.momento == _Momento.reaccion
+                      ? ((sesion.elegida?.correcta ?? false)
+                          ? GestoMascota.acierto
+                          : GestoMascota.fallo)
+                      : GestoMascota.reposo,
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // 4. El texto, quieto.
+        //
+        //    El seguimiento es lo que hace que esto sea realidad
+        //    aumentada, pero leer tres líneas sobre algo que se mueve con
+        //    el pulso de la mano no se puede, y acertarle a un botón de
+        //    38 px tampoco. Separar las dos cosas resuelve las dos.
+        Positioned(
+          left: (tamanoVista.width - anchoPanel) / 2,
+          bottom: 16,
+          width: anchoPanel,
+          child: _PanelDeslizante(
+            paso: sesion.momento.index,
+            desdeLaDerecha: sesion.momento.index.isEven,
+            child: _Globo(
+              sesion: sesion,
+              onAvanzar: onAvanzar,
+              onElegir: onElegir,
+              onFicha: onFicha,
+              onCerrar: onCerrar,
             ),
           ),
         ),
@@ -948,20 +1259,111 @@ class _DialogoAnclado extends StatelessWidget {
   }
 }
 
-/// El piquito del globo, apuntando al muñeco.
-class _PintaPico extends CustomPainter {
+/// La mancha de sombra que el muñeco proyecta sobre la tarjeta.
+///
+/// De todo lo que hay en esta pantalla, esto es lo que más hace por que
+/// la escena se lea como real, y cuesta cuatro líneas. Sin ella el muñeco
+/// es un dibujo encima del vídeo; con ella hay algo suspendido sobre un
+/// papel. El cerebro resuelve «dónde está esto» con la sombra mucho antes
+/// que con la perspectiva.
+///
+/// Se dibuja aparte del muñeco y no dentro de él, porque las dos cosas
+/// viven en sitios distintos: la sombra está sobre la hoja y se proyecta
+/// con su perspectiva; el muñeco está en el aire y se queda derecho.
+///
+/// El difuminado es un degradado radial y no un desenfoque de verdad:
+/// a este tamaño no se distingue y cuesta una fracción.
+class _SombraEnElPlano extends StatelessWidget {
+  final double ancho;
+  final double alto;
+
+  const _SombraEnElPlano({required this.ancho, required this.alto});
+
   @override
-  void paint(Canvas lienzo, Size t) {
-    final camino = Path()
-      ..moveTo(t.width, t.height * 0.12)
-      ..lineTo(0, t.height * 0.5)
-      ..lineTo(t.width, t.height * 0.88)
-      ..close();
-    lienzo.drawPath(camino, Paint()..color = Colors.white);
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: ancho,
+      height: alto,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.all(
+            Radius.elliptical(ancho / 2, alto / 2),
+          ),
+          gradient: const RadialGradient(
+            colors: [
+              Color.fromRGBO(0, 0, 0, 0.40),
+              Color.fromRGBO(0, 0, 0, 0.0),
+            ],
+            stops: [0.15, 1.0],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PanelDeslizante extends StatefulWidget {
+  /// Cambiar este número es lo que dispara la entrada.
+  final int paso;
+
+  final bool desdeLaDerecha;
+  final Widget child;
+
+  const _PanelDeslizante({
+    required this.paso,
+    required this.desdeLaDerecha,
+    required this.child,
+  });
+
+  @override
+  State<_PanelDeslizante> createState() => _PanelDeslizanteState();
+}
+
+class _PanelDeslizanteState extends State<_PanelDeslizante>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _entra;
+
+  @override
+  void initState() {
+    super.initState();
+    _entra = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+    )..forward();
   }
 
   @override
-  bool shouldRepaint(_PintaPico oldDelegate) => false;
+  void didUpdateWidget(_PanelDeslizante anterior) {
+    super.didUpdateWidget(anterior);
+    // Solo al cambiar de paso. El padre reconstruye a cada fotograma para
+    // mover al muñeco, y sin esta comparación el panel estaría entrando
+    // una y otra vez sin llegar nunca.
+    if (widget.paso != anterior.paso) _entra.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _entra.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _entra,
+      // El hijo se construye una vez y se reutiliza en cada fotograma de
+      // la animación: lo único que cambia es la transformación.
+      child: widget.child,
+      builder: (context, hijo) {
+        final t = Curves.easeOutCubic.transform(_entra.value);
+        final desde = widget.desdeLaDerecha ? 1.0 : -1.0;
+        return FractionalTranslation(
+          translation: Offset(desde * (1 - t), 0),
+          child: Opacity(opacity: t.clamp(0.0, 1.0), child: hijo),
+        );
+      },
+    );
+  }
 }
 
 // ==========================================================================
@@ -993,12 +1395,7 @@ class _Globo extends StatelessWidget {
     final caso = sesion.caso;
     final elegida = sesion.elegida;
 
-    final texto = switch (sesion.momento) {
-      _Momento.encargo => caso.enganche,
-      _Momento.pregunta => '¿Qué normativa aplicarías aquí?',
-      _Momento.reaccion => elegida?.reaccion ?? '',
-      _Momento.consejo => caso.primerPaso,
-    };
+    final texto = _textoDelMomento(sesion);
 
     return Material(
       color: Colors.white,
@@ -1300,74 +1697,73 @@ class _FichaCasoState extends State<_FichaCaso> {
                 ),
               ),
 
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(caso.icono, style: const TextStyle(fontSize: 26)),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Text(
-                      caso.titulo,
-                      style: const TextStyle(
-                        color: AppColors.textDark,
-                        fontSize: 20,
-                        height: 1.2,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
+              // En vez del emoji, un antetítulo. Lo que el emoji
+              // intentaba decir lo dice mejor una palabra, y además se ve
+              // igual en todos los teléfonos.
+              const Text(
+                'CASO PARA ANALIZAR',
+                style: TextStyle(
+                  color: AppColors.deepPurple,
+                  fontSize: 10.5,
+                  letterSpacing: 1.3,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 7),
+              Text(
+                caso.titulo,
+                style: const TextStyle(
+                  color: AppColors.textDark,
+                  fontSize: 22,
+                  height: 1.18,
+                  letterSpacing: -0.3,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const SizedBox(height: 10),
               Text(
                 caso.contexto,
                 style: const TextStyle(
-                  color: AppColors.textDark,
+                  color: AppColors.textGrey,
                   fontSize: 14.5,
-                  height: 1.45,
+                  height: 1.5,
                   fontWeight: FontWeight.w400,
                 ),
               ),
 
-              // Qué contestó, si ya contestó. Es lo que convierte la ficha
-              // en una corrección y no en un texto más.
+              // La corrección, justo debajo del encargo y no enterrada a
+              // media ficha: es lo que convierte esto en una corrección y
+              // no en un texto más, así que va donde se lee primero.
               if (respuesta != null) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 18),
                 _TuRespuesta(respuesta: respuesta, caso: caso),
               ],
 
-              const SizedBox(height: 22),
+              const _Separador(),
               const _Rotulo('Qué normativa aplica'),
-              const SizedBox(height: 10),
+              const SizedBox(height: 14),
               for (final n in caso.normas) _FilaNorma(norma: n),
 
-              const SizedBox(height: 14),
+              const _Separador(),
               const _Rotulo('Por dónde empezar'),
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryGreen.withValues(alpha: 0.09),
-                  borderRadius: BorderRadius.circular(AppRadius.chip),
-                  border: Border.all(
-                    color: AppColors.primaryGreen.withValues(alpha: 0.28),
-                  ),
-                ),
+              const SizedBox(height: 12),
+              _ConFilete(
+                color: AppColors.primaryGreen,
                 child: Text(
                   caso.primerPaso,
                   style: const TextStyle(
-                    color: Color(0xFF2F5E13),
+                    color: AppColors.textDark,
                     fontSize: 14,
-                    height: 1.5,
+                    height: 1.55,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
               ),
 
               if (_preguntando || _respuesta != null) ...[
-                const SizedBox(height: 22),
+                const _Separador(),
                 const _Rotulo('El tutor sobre este caso'),
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 _BloqueTutor(
                   pensando: _preguntando,
                   estadoCola: _estadoCola,
@@ -1424,14 +1820,15 @@ class _FichaCasoState extends State<_FichaCaso> {
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 18),
               Center(
                 child: Text(
                   'Marcador ${caso.id}'
                   '${caso.tema == null ? '' : '  ·  tema ${caso.tema} del sílabo'}',
-                  style: const TextStyle(
-                    color: AppColors.textGrey,
-                    fontSize: 11.5,
+                  style: TextStyle(
+                    color: AppColors.textGrey.withValues(alpha: 0.65),
+                    fontSize: 11,
+                    letterSpacing: 0.2,
                     fontWeight: FontWeight.w400,
                   ),
                 ),
@@ -1454,33 +1851,58 @@ class _TuRespuesta extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bien = respuesta.acerto;
+    final tono = bien ? AppColors.primaryGreen : AppColors.gold;
+    // Un tono oscuro propio para el titular: el de relleno no tiene
+    // contraste suficiente sobre su propio fondo al 10 %.
+    final tinta = bien ? const Color(0xFF2F5E13) : const Color(0xFF7A5200);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      padding: const EdgeInsets.fromLTRB(14, 13, 14, 14),
       decoration: BoxDecoration(
-        color: (bien ? AppColors.primaryGreen : AppColors.gold)
-            .withValues(alpha: 0.10),
+        color: tono.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(AppRadius.chip),
+        border: Border.all(color: tono.withValues(alpha: 0.24)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
-            bien ? Icons.check_circle_rounded : Icons.lightbulb_rounded,
-            size: 18,
-            color: bien ? AppColors.primaryGreen : AppColors.gold,
+            bien ? Icons.check_circle_rounded : Icons.flag_rounded,
+            size: 19,
+            color: tono,
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 11),
           Expanded(
-            child: Text(
-              bien
-                  ? 'Elegiste ${respuesta.eligio} y era la correcta.'
-                  : 'Elegiste ${respuesta.eligio}. '
-                      'La que manda aquí es ${caso.opcionCorrecta.etiqueta}.',
-              style: const TextStyle(
-                color: AppColors.textDark,
-                fontSize: 13,
-                height: 1.4,
-                fontWeight: FontWeight.w500,
-              ),
+            // Dos niveles: el veredicto de un vistazo y el detalle
+            // debajo. En una sola línea corrida había que leerla entera
+            // para saber si se había acertado.
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  bien ? 'Acertaste' : 'Esa no era',
+                  style: TextStyle(
+                    color: tinta,
+                    fontSize: 13.5,
+                    letterSpacing: 0.1,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  bien
+                      ? 'Elegiste ${respuesta.eligio}, y es la que aplica '
+                          'en este caso.'
+                      : 'Elegiste ${respuesta.eligio}. La que aplica aquí '
+                          'es ${caso.opcionCorrecta.etiqueta}.',
+                  style: const TextStyle(
+                    color: AppColors.textDark,
+                    fontSize: 13.5,
+                    height: 1.45,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1499,9 +1921,62 @@ class _Rotulo extends StatelessWidget {
       texto.toUpperCase(),
       style: const TextStyle(
         color: AppColors.textGrey,
-        fontSize: 11,
-        letterSpacing: 0.9,
-        fontWeight: FontWeight.w700,
+        fontSize: 10.5,
+        letterSpacing: 1.2,
+        fontWeight: FontWeight.w800,
+      ),
+    );
+  }
+}
+
+/// Un filo entre secciones.
+///
+/// La ficha es una columna larga y solo con espacios en blanco las
+/// secciones se confunden con los párrafos. Una línea de un píxel separa
+/// sin añadir ruido, que es más de lo que hacían las cajas de colores.
+class _Separador extends StatelessWidget {
+  const _Separador();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 22, 0, 16),
+      child: Container(
+        height: 1,
+        color: AppColors.border.withValues(alpha: 0.6),
+      ),
+    );
+  }
+}
+
+/// Un bloque con un filete de color a la izquierda.
+///
+/// Es lo que sustituye a la caja rellena del primer paso. Rellenar dos
+/// bloques de la misma ficha hacía que compitieran; con un filete, el
+/// bloque sigue destacando pero no le disputa el sitio a la corrección,
+/// que es lo que hay que leer sí o sí.
+class _ConFilete extends StatelessWidget {
+  final Color color;
+  final Widget child;
+
+  const _ConFilete({required this.color, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            width: 3,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.75),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(child: child),
+        ],
       ),
     );
   }
@@ -1513,29 +1988,29 @@ class _FilaNorma extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // La norma, encima de su explicación y no al lado.
+    //
+    // Con el chip a la izquierda, el párrafo arrancaba a una altura
+    // distinta y cada fila rompía el margen izquierdo de la siguiente.
+    // Apilados, todo cuelga de la misma línea y la ficha se lee de
+    // arriba abajo sin saltos.
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            margin: const EdgeInsets.only(top: 3),
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-            decoration: BoxDecoration(
-              color: AppColors.deepPurple.withValues(alpha: 0.11),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              norma.norma,
-              style: const TextStyle(
-                color: AppColors.deepPurpleDark,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-              ),
+          Text(
+            norma.norma,
+            style: const TextStyle(
+              color: AppColors.deepPurpleDark,
+              fontSize: 13,
+              letterSpacing: 0.15,
+              fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
+          const SizedBox(height: 4),
+          SizedBox(
+            width: double.infinity,
             child: Text(
               norma.porque,
               style: const TextStyle(

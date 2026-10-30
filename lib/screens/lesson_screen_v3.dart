@@ -7,9 +7,13 @@ import '../models/ejercicio_model.dart';
 import '../services/progreso_service.dart';
 import '../data/frases_mascota.dart';
 import '../data/mock_preguntas.dart';
+import '../data/casos_ra.dart';
 import '../data/mock_contenidos.dart';
+import '../services/hoja_marcadores.dart';
 import 'chat_screen.dart';
+import 'main_scaffold.dart';
 import '../widgets/mascota_eso.dart';
+import '../widgets/mascota_viva.dart' show GestoMascota;
 
 /// Pantalla de Lección.
 ///
@@ -45,6 +49,16 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
   int _respuestasCorrectas = 0;
   int _xpTotalesGanados = 0;
   bool _leccionCompletada = false;
+
+  /// true mientras se muestra el puente entre la teoría y los ejercicios.
+  bool _enPuente = false;
+
+  /// true cuando ESTA lección fue la que cerró el mundo.
+  ///
+  /// Se calcula comparando antes y después de completarla, no preguntando
+  /// solo después: si el mundo ya estaba cerrado porque el estudiante
+  /// repitió una lección, ofrecerle otra vez las tarjetas sería ruido.
+  bool _mundoCerrado = false;
 
   final math.Random _azar = math.Random();
 
@@ -153,11 +167,20 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
         curve: Curves.easeOutCubic,
       );
     } else {
-      setState(() {
-        _pasoActual = 1;
-        _refrescarFrase();
-      });
+      setState(() => _enPuente = true);
     }
+  }
+
+  /// El número de mundo, sacado del id de la lección (`cap-2-3-lec-1`).
+  ///
+  /// Se deduce del id y no de `mundo.numeroMundo` a propósito: es la misma
+  /// fuente de la que sale `CasoRA.mundo`, de modo que los dos no pueden
+  /// discrepar. Si algún día cambiara el formato del id, dejarían de
+  /// emparejarse a la vez y el fallo sería visible, en lugar de repartir
+  /// en silencio las tarjetas de otro mundo.
+  int? _numeroDeMundo() {
+    final m = RegExp(r'^cap-(\d)-').firstMatch(widget.leccion.id);
+    return m == null ? null : int.tryParse(m.group(1)!);
   }
 
   /// Sortea la frase de la burbuja para la pregunta actual.
@@ -227,16 +250,28 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
     }
   }
 
-  Future<void> _completarLeccion() async {
+  void _completarLeccion() {
     setState(() => _leccionCompletada = true);
 
-    // Ademas de marcarla en memoria, la guarda en el dispositivo y la
-    // reporta al servidor (+20 XP y racha). No vuelve a reportar si la
-    // leccion ya estaba completada: el backend no deduplica.
-    await ProgresoService.instance.completarLeccion(
+    // Antes y después, para distinguir «este mundo acaba de cerrarse» de
+    // «este mundo ya estaba cerrado y el estudiante repitió una lección».
+    final servicio = ProgresoService.instance;
+    final yaEstaba = servicio.estaMundoCompletado(widget.mundo);
+
+    // Se lanza sin esperar, a proposito. El servicio actualiza XP, racha y
+    // candados en memoria antes de tocar nada lento; lo que viene despues
+    // es guardar en disco y reportar al servidor, y el estudiante no tiene
+    // por que esperar a la red para ver su resumen. Con el servidor
+    // inalcanzable, el await anterior congelaba la pantalla hasta que
+    // expiraba la peticion.
+    ProgresoService.instance.completarLeccion(
       widget.leccion.id,
       _xpTotalesGanados,
     );
+
+    // `completarLeccion` marca la lección antes de su primer await, así
+    // que esto ya refleja el estado nuevo aunque no se haya esperado.
+    _mundoCerrado = !yaEstaba && servicio.estaMundoCompletado(widget.mundo);
 
     Future.delayed(const Duration(milliseconds: 350), () {
       if (mounted) _mostrarResumen();
@@ -379,7 +414,16 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const MascotaESO(size: 112),
+                // Salta solo si la tanda salió entera. Celebrar un
+                // 2 de 4 igual que un pleno convierte la celebración en
+                // ruido de fondo: si siempre ocurre, no dice nada.
+                MascotaESO(
+                  size: 112,
+                  saludoPeriodico: true,
+                  gesto: _respuestasCorrectas == _ejercicios.length
+                      ? GestoMascota.acierto
+                      : GestoMascota.reposo,
+                ),
                 const SizedBox(height: 14),
                 Text(
                   FrasesMascota.resumen(
@@ -419,7 +463,14 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
                   child: ElevatedButton(
                     onPressed: () {
                       Navigator.pop(context);
-                      Navigator.pop(context);
+                      // Si esta lección cerró el mundo, antes de salir se
+                      // ofrecen las tarjetas de realidad aumentada que
+                      // practican lo que acaba de verse.
+                      if (_mundoCerrado) {
+                        _mostrarMundoCompletado();
+                      } else {
+                        Navigator.pop(context);
+                      }
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: widget.mundo.colorPrimario,
@@ -457,6 +508,185 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
                   style: TextButton.styleFrom(
                       foregroundColor: widget.mundo.colorPrimario),
                   child: const Text('Repasar la lección'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Al cerrar un mundo: las tarjetas de RA que practican ese temario.
+  ///
+  /// Es el puente que faltaba entre los dos componentes. El Modo Ruta
+  /// enseña la norma y el escáner la pone en un caso, pero hasta ahora el
+  /// estudiante que terminaba un tema no tenía manera de llegar al caso
+  /// que lo practica: las tarjetas las imprimía el docente y quien no
+  /// estaba ese día se quedaba fuera.
+  void _mostrarMundoCompletado() {
+    final color = widget.mundo.colorPrimario;
+    final numero = _numeroDeMundo();
+    final casos =
+        numero == null ? const <CasoRA>[] : HojaMarcadores.casosDelMundo(numero);
+
+    // Sin casos asociados no hay nada que ofrecer, y un diálogo que no
+    // lleva a ninguna parte es peor que no mostrarlo.
+    if (casos.isEmpty) {
+      Navigator.pop(context);
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogo) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+        child: SingleChildScrollView(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(26, 28, 26, 22),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(26),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Center(
+                  child: MascotaESO(
+                    size: 100,
+                    saludoPeriodico: true,
+                    gesto: GestoMascota.acierto,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Center(
+                  child: _Etiqueta(texto: 'UNIDAD COMPLETA', color: color),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Terminaste ${widget.mundo.nombre}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
+                    letterSpacing: -0.4,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  casos.length == 1
+                      ? 'Hay un caso de realidad aumentada que practica justo '
+                          'esto. Imprime la tarjeta, déjala sobre la mesa y '
+                          'apúntala con la pestaña Escáner AR.'
+                      : 'Hay ${casos.length} casos de realidad aumentada que '
+                          'practican justo esto. Imprime las tarjetas, '
+                          'déjalas sobre la mesa y apúntalas con la pestaña '
+                          'Escáner AR.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    height: 1.5,
+                    color: Colors.grey[700],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Las tienes siempre en el icono de tarjetas del Escáner '
+                  'AR, por si prefieres imprimirlas en otro momento.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.45,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final caso in casos)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 5),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.qr_code_2_rounded,
+                                  size: 17, color: color),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  caso.titulo,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    height: 1.35,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF2A2A32),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: () => HojaMarcadores.imprimirMundo(
+                    numero!,
+                    titulo: widget.mundo.nombre,
+                    // La hoja sale con el color de su mundo, el mismo que
+                    // el estudiante acaba de ver en la ruta.
+                    color: color,
+                  ),
+                  icon: const Icon(Icons.print_rounded, size: 19),
+                  label: Text(
+                    casos.length == 1
+                        ? 'Imprimir la tarjeta'
+                        : 'Imprimir las tarjetas',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: color,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(dialogo);
+                    // Primero se deshace la pila hasta el contenedor y
+                    // después se le pide la pestaña: al revés, el cambio
+                    // de pestaña quedaría tapado por las rutas que siguen
+                    // encima.
+                    Navigator.of(context).popUntil((r) => r.isFirst);
+                    PestanaPrincipal.pedir(
+                      PestanaPrincipal.realidadAumentada,
+                    );
+                  },
+                  style: TextButton.styleFrom(foregroundColor: color),
+                  child: const Text('Ir al escáner ahora'),
                 ),
               ],
             ),
@@ -555,9 +785,11 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
       ),
       body: _leccionCompletada
           ? const SizedBox()
-          : enTeoria
-              ? _buildTeoria()
-              : _buildEjercicio(),
+          : _enPuente
+              ? _buildPuente()
+              : enTeoria
+                  ? _buildTeoria()
+                  : _buildEjercicio(),
     );
   }
 
@@ -625,6 +857,79 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
     );
   }
 
+  /// El puente entre la teoría y los ejercicios.
+  ///
+  /// Antes se pasaba de la última tarjeta a la primera pregunta sin aviso:
+  /// el estudiante seguía leyendo y de pronto le estaban preguntando.
+  /// Separar las dos fases le da el momento de cambiar de disposición, que
+  /// no cuesta nada y es justo lo que distingue estudiar de que te
+  /// examinen.
+  Widget _buildPuente() {
+    final color = widget.mundo.colorPrimario;
+
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(30, 24, 30, 30),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Aquí sí se mueve: es una pausa de dos frases, no una
+            // pantalla de estudio. Durante los ejercicios se queda
+            // quieta a propósito, que es cuando hay que pensar.
+            const MascotaESO(size: 120, saludoPeriodico: true),
+            const SizedBox(height: 18),
+            _Etiqueta(texto: 'TEORÍA COMPLETA', color: color),
+            const SizedBox(height: 14),
+            const Text(
+              'Pasemos a las preguntas de lo visto',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                height: 1.2,
+                letterSpacing: -0.6,
+                color: Color(0xFF17171C),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _ejercicios.length == 1
+                  ? 'Una pregunta sobre lo que acabas de leer. Si fallas, la '
+                      'vuelves a intentar.'
+                  : 'Son ${_ejercicios.length} preguntas sobre lo que acabas '
+                      'de leer. Si fallas alguna, la vuelves a intentar.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 15.5,
+                height: 1.55,
+                color: Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 30),
+            _BotonPrincipal(
+              texto: 'Empezar',
+              color: color,
+              onPressed: () => setState(() {
+                _enPuente = false;
+                _pasoActual = 1;
+                _refrescarFrase();
+              }),
+            ),
+            const SizedBox(height: 4),
+            // Volver atrás tiene que ser posible: alguien querrá releer la
+            // última idea antes de contestar, y obligarle a salir de la
+            // lección para eso sería absurdo.
+            TextButton(
+              onPressed: () => setState(() => _enPuente = false),
+              style: TextButton.styleFrom(foregroundColor: color),
+              child: const Text('Volver a la teoría'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSinContenido() {
     return Center(
       child: Padding(
@@ -674,86 +979,102 @@ class _LessonScreenV3State extends State<LessonScreenV3> {
     final esBanco = ejercicio.tipo == TipoEjercicio.completarTexto &&
         _opciones[_pasoActual - 1].isNotEmpty;
 
-    // El contenido se reparte en tres bloques y ocupa la altura completa.
-    // Antes todo se apilaba arriba y el hueco sobrante quedaba al fondo,
-    // que es lo que hacía parecer la pantalla a medio terminar.
-    return LayoutBuilder(
-      builder: (context, cajas) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(22, 6, 22, 24),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: cajas.maxHeight - 30),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    // La pantalla se divide en tres franjas, y solo la del medio se
+    // desplaza.
+    //
+    // POR QUÉ LA MASCOTA Y EL BOTÓN NO SE DESPLAZAN
+    // ---------------------------------------------
+    // Antes todo iba dentro de un mismo área desplazable. Con preguntas
+    // largas eso tenía dos consecuencias malas: la mascota se iba hacia
+    // arriba y desaparecía justo cuando el estudiante está pensando, y
+    // el botón de comprobar quedaba más abajo del borde, de modo que
+    // había que bajar a buscarlo después de elegir.
+    //
+    // Fijando las dos franjas de los extremos, la mascota acompaña todo
+    // el ejercicio y confirmar está siempre a un toque, se desplace lo
+    // que se desplace el enunciado.
+    return Column(
+      children: [
+        // ---------- Fijo: la mascota ----------
+        Padding(
+          padding: const EdgeInsets.fromLTRB(22, 6, 22, 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // ---------- Enunciado ----------
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      const MascotaESO(size: 70, saludoPeriodico: false),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _Burbuja(texto: _fraseBurbuja, color: color),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  _Etiqueta(
+              const MascotaESO(size: 70, saludoPeriodico: false),
+              const SizedBox(width: 10),
+              Expanded(child: _Burbuja(texto: _fraseBurbuja, color: color)),
+            ],
+          ),
+        ),
+
+        // ---------- Desplazable: enunciado y respuestas ----------
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(22, 4, 22, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: _Etiqueta(
                     texto: 'PREGUNTA $_pasoActual DE ${_ejercicios.length}',
                     color: color,
                   ),
-                  if (!esBanco) ...[
-                    const SizedBox(height: 10),
-                    Text(
-                      ejercicio.pregunta,
-                      style: const TextStyle(
-                        fontSize: 21,
-                        fontWeight: FontWeight.w800,
-                        height: 1.32,
-                        letterSpacing: -0.3,
-                        color: Color(0xFF17171C),
-                      ),
+                ),
+                if (!esBanco) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    ejercicio.pregunta,
+                    style: const TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w800,
+                      height: 1.32,
+                      letterSpacing: -0.3,
+                      color: Color(0xFF17171C),
                     ),
-                  ],
-                ],
-              ),
-
-              // ---------- Respuesta ----------
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 22),
-                child: _buildOpciones(ejercicio, _opciones[_pasoActual - 1]),
-              ),
-
-              // ---------- Pista y confirmación, abajo ----------
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (ejercicio.pista.isNotEmpty)
-                    // La clave es necesaria: sin ella Flutter reutiliza
-                    // el State de la pista anterior y, una vez abierta
-                    // una, las siguientes aparecen ya desplegadas.
-                    _Pista(
-                      key: ValueKey('pista-${ejercicio.id}'),
-                      texto: ejercicio.pista,
-                      color: color,
-                    ),
-                  const SizedBox(height: 12),
-                  _BotonPrincipal(
-                    texto: 'Comprobar',
-                    color: color,
-                    onPressed: _respuestaElegida == null
-                        ? null
-                        : () => _responderEjercicio(_respuestaElegida!),
                   ),
                 ],
+                const SizedBox(height: 22),
+                _buildOpciones(ejercicio, _opciones[_pasoActual - 1]),
+              ],
+            ),
+          ),
+        ),
+
+        // ---------- Fijo: pista y confirmación ----------
+        Container(
+          padding: const EdgeInsets.fromLTRB(22, 10, 22, 18),
+          decoration: const BoxDecoration(
+            color: Color(0xFFFBFBFD),
+            border: Border(top: BorderSide(color: Color(0xFFEDEDF3))),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (ejercicio.pista.isNotEmpty) ...[
+                // La clave es necesaria: sin ella Flutter reutiliza el
+                // State de la pista anterior y, una vez abierta una, las
+                // siguientes aparecen ya desplegadas.
+                _Pista(
+                  key: ValueKey('pista-${ejercicio.id}'),
+                  texto: ejercicio.pista,
+                  color: color,
+                ),
+                const SizedBox(height: 10),
+              ],
+              _BotonPrincipal(
+                texto: 'Comprobar',
+                color: color,
+                onPressed: _respuestaElegida == null
+                    ? null
+                    : () => _responderEjercicio(_respuestaElegida!),
               ),
             ],
           ),
         ),
-      ),
+      ],
     );
   }
 
@@ -968,32 +1289,35 @@ class _TarjetaVista extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: constraints.maxHeight - 20),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    // Igual que en los ejercicios: la mascota se queda fija arriba y solo
+    // se desplaza la tarjeta. Con las lecciones ampliadas hay tarjetas
+    // que ya no caben de una vez, y al desplazarlas la mascota se perdía.
+    return Column(
+      children: [
+        // ---------- Fijo: la mascota ----------
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Mascota y burbuja
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  MascotaESO(
-                    size: primera ? 92 : 74,
-                    saludoPeriodico: primera,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _Burbuja(texto: tarjeta.mensaje, color: color),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
+              MascotaESO(size: primera ? 92 : 74, saludoPeriodico: primera),
+              const SizedBox(width: 10),
+              Expanded(child: _Burbuja(texto: tarjeta.mensaje, color: color)),
+            ],
+          ),
+        ),
 
-              Container(
+        // ---------- Desplazable: el cuerpo de la idea ----------
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                // Centrada cuando la idea es corta; desde arriba cuando no
+                // cabe, que es el comportamiento natural al desplazarse.
+                child: Center(
+                  child: Container(
                 padding: const EdgeInsets.fromLTRB(22, 22, 22, 24),
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -1111,13 +1435,15 @@ class _TarjetaVista extends StatelessWidget {
                         ),
                       ),
                     ],
-                  ],
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ],
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

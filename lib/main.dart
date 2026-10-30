@@ -1,6 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'package:rive/rive.dart' as rive;
 
 import 'firebase_options.dart';
 import 'screens/auth/login_screen.dart';
@@ -42,14 +41,9 @@ Future<void> main() async {
     }
   }
 
-  // Rive 0.14+ usa un runtime nativo en C++. Va dentro de try/catch
-  // porque un fallo aquí no debe impedir que la app abra: solo el
-  // escáner AR usa animaciones .riv.
-  try {
-    await rive.RiveNative.init();
-  } catch (e) {
-    debugPrint('Rive no se pudo inicializar -> $e');
-  }
+  // La voz de la mascota no se prepara aquí a propósito: se busca al
+  // entrar en el escáner, que es la única pantalla que habla, y así el
+  // arranque no espera por el motor de síntesis.
 
   runApp(const NormativasApp());
 }
