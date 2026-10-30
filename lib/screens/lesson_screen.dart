@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../models/SeccionSilabo.dart';
+import '../models/seccion_silabo.dart';
 import '../models/ejercicio_model.dart';
 import '../services/progreso_service.dart';
 import '../data/frases_mascota.dart';
@@ -19,12 +19,12 @@ import '../widgets/mascota_viva.dart' show GestoMascota;
 ///
 /// Fase 1: teoría en tarjetas, una idea por pantalla.
 /// Fase 2: ejercicios con retroalimentación inmediata.
-class LessonScreenV3 extends StatefulWidget {
+class LessonScreen extends StatefulWidget {
   final SeccionSilabo mundo;
   final CapituloSilabo capitulo;
   final LeccionSilabo leccion;
 
-  const LessonScreenV3({
+  const LessonScreen({
     super.key,
     required this.mundo,
     required this.capitulo,
@@ -32,10 +32,10 @@ class LessonScreenV3 extends StatefulWidget {
   });
 
   @override
-  State<LessonScreenV3> createState() => _LessonScreenV3State();
+  State<LessonScreen> createState() => _LessonScreenState();
 }
 
-class _LessonScreenV3State extends State<LessonScreenV3> {
+class _LessonScreenState extends State<LessonScreen> {
   /// Cuántas preguntas se plantean por intento.
   ///
   /// Si el banco de la lección tiene más, se toma una muestra distinta

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/mapeo_lecciones.dart';
-import '../models/SeccionSilabo.dart';
+import '../models/seccion_silabo.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/chat_service.dart';

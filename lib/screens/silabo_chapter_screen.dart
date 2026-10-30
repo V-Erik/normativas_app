@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import '../models/SeccionSilabo.dart';
+import '../models/seccion_silabo.dart';
 import '../services/progreso_service.dart';
 import '../widgets/mascota_eso.dart';
-import 'lesson_screen_v3.dart';
+import 'lesson_screen.dart';
 
 /// Lecciones de un capítulo, presentadas como una ruta vertical.
 class SilabusChapterScreen extends StatelessWidget {
@@ -36,7 +36,7 @@ class SilabusChapterScreen extends StatelessWidget {
 
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => LessonScreenV3(
+        builder: (_) => LessonScreen(
           mundo: mundo,
           capitulo: capitulo,
           leccion: leccion,

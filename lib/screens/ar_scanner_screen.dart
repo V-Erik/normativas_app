@@ -14,7 +14,7 @@ import '../services/voz_mascota.dart';
 import '../theme/app_theme.dart';
 import '../widgets/ancla_ra.dart';
 import '../widgets/mascota_viva.dart';
-import 'lesson_screen_v3.dart';
+import 'lesson_screen.dart';
 import 'tarjetas_ra_screen.dart';
 
 /// Realidad aumentada sobre marcadores impresos.
@@ -698,7 +698,7 @@ class _ArScannerScreenState extends State<ArScannerScreen>
 
           Navigator.of(context).push(
             MaterialPageRoute<void>(
-              builder: (_) => LessonScreenV3(
+              builder: (_) => LessonScreen(
                 mundo: mundo,
                 capitulo: capitulo,
                 leccion: leccion,

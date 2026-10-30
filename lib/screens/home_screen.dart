@@ -1,20 +1,20 @@
 import 'package:flutter/material.dart';
 
-import '../models/SeccionSilabo.dart';
+import '../models/seccion_silabo.dart';
 import '../services/auth_service.dart';
 import '../services/progreso_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mascota_viva.dart';
 import 'glosario_screen.dart';
-import 'lesson_screen_v3.dart';
+import 'lesson_screen.dart';
 import 'silabo_roadmap_screen.dart';
 
 /// Pantalla de inicio.
 ///
 /// Cabecera con la mascota, tarjeta de acción superpuesta, recorrido del
 /// sílabo y actividad. Los bloques entran escalonados al abrir.
-class HomeScreenRediseno extends StatelessWidget {
-  const HomeScreenRediseno({super.key});
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
 
   // ==================== NAVEGACIÓN ====================
 
@@ -27,7 +27,7 @@ class HomeScreenRediseno extends StatelessWidget {
   void _abrirLeccion(BuildContext context, _Siguiente s) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => LessonScreenV3(
+        builder: (_) => LessonScreen(
           mundo: s.mundo,
           capitulo: s.capitulo,
           leccion: s.leccion,

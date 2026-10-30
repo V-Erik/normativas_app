@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/casos_ra.dart';
-import '../models/SeccionSilabo.dart';
+import '../models/seccion_silabo.dart';
 import '../services/hoja_marcadores.dart';
 import '../services/progreso_service.dart';
 import '../theme/app_theme.dart';

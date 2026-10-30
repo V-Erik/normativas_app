@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/SeccionSilabo.dart';
+import '../models/seccion_silabo.dart';
 
 /// DATOS INICIALES REFACTORIZADOS
 /// Basados en el Sílabo Oficial: "Normativas de Ingeniería de Software" (UPEC)

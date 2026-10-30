@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/mock_data_silabo.dart';
-import '../models/SeccionSilabo.dart';
+import '../models/seccion_silabo.dart';
 import 'api_client.dart';
 import 'api_config.dart';
 import 'auth_service.dart';

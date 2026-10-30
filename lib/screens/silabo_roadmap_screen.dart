@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/SeccionSilabo.dart';
+import '../models/seccion_silabo.dart';
 import '../services/progreso_service.dart';
 import '../widgets/mascota_eso.dart';
 import 'silabo_chapter_screen.dart';

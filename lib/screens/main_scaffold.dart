@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../widgets/app_bottom_nav.dart';
 import 'ar_scanner_screen.dart';
 import 'chat_screen.dart';
-import 'home_screen_rediseno.dart';
+import 'home_screen.dart';
 import 'profile_screen.dart';
 
 /// La pestaña que la aplicación debe estar mostrando.
@@ -104,7 +104,7 @@ class _MainScaffoldState extends State<MainScaffold> {
       body: IndexedStack(
         index: _index,
         children: [
-          const HomeScreenRediseno(),
+          const HomeScreen(),
           const ChatScreen(),
           _raMontada
               ? ArScannerScreen(
